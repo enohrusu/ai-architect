@@ -119,7 +119,7 @@ def generate_house(request: HouseRequest):
     with open(layout_data_path, "w", encoding="utf-8") as f:
         json.dump(layout_data, f, indent=2)
 
-    run_blender(project_folder)
+    # run_blender(project_folder)
 
     # Save project to database
     conn = get_connection()
