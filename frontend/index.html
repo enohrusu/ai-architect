@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Architect</title>
+
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    h1, h2, h3 {
+      color: #222;
+    }
+
+    textarea {
+      width: 100%;
+      height: 120px;
+      padding: 12px;
+      font-size: 16px;
+      margin-bottom: 12px;
+      resize: vertical;
+    }
+
+    button {
+      background: #222;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    button:hover {
+  background: #444;
+}
+
+button:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      margin-top: 20px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .info-box {
+      background: #fafafa;
+      border: 1px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .label {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+
+    .value {
+      font-size: 22px;
+      font-weight: bold;
+      color: #111;
+    }
+
+    pre {
+      background: #111;
+      color: #0f0;
+      padding: 15px;
+      border-radius: 8px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .status {
+      margin-top: 12px;
+      font-weight: bold;
+    }
+
+    img {
+      max-width: 100%;
+      border-radius: 10px;
+      margin-top: 12px;
+      border: 1px solid #ddd;
+    }
+
+    a {
+      display: inline-block;
+      margin-top: 10px;
+      color: #0066cc;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    model-viewer {
+      width: 100%;
+      height: 600px;
+      background: #e9ecef;
+      border-radius: 10px;
+      margin-top: 12px;
+      border: 1px solid #ddd;
+    }
+  </style>
+</head>
+<body>
+  <h1>AI Architect</h1>
+  <p>Describe the house you want, then generate it.</p>
+
+  <textarea id="promptInput" placeholder="Example: Modern house with 3 bedrooms, 2 bathrooms, 140 square meters, 2 floors and a garage"></textarea>
+
+  <button id="generateBtn" onclick="generateHouse()">Generate House</button>
+
+  <div class="status" id="status"></div>
+
+  <div style="margin-top: 10px;">
+  <button id="upgradeBtn" onclick="showUpgradeMessage()">Upgrade to Pro - €20/month</button>
+</div>
+
+  <div id="loader" style="display:none; margin-top:10px;">
+  ⏳ Generating your house... this may take a few seconds
+</div>
+
+<div class="card">
+  <h2>Account</h2>
+
+  <input id="emailInput" type="email" placeholder="Email" style="width:100%; padding:12px; margin-bottom:10px;" />
+  <input id="passwordInput" type="password" placeholder="Password" style="width:100%; padding:12px; margin-bottom:10px;" />
+
+  <button onclick="signupUser()">Sign Up</button>
+  <button onclick="loginUser()" style="margin-left:10px;">Log In</button>
+
+  <div id="authStatus" style="margin-top:10px; font-weight:bold;"></div>
+</div>
+
+  <div class="card">
+  <h2>Project Info</h2>
+  <div id="projectInfo">No project yet.</div>
+</div>
+
+<div class="card">
+  <h2>Pricing</h2>
+  <div class="grid">
+    <div class="info-box">
+      <div class="label">Free</div>
+      <div class="value">€0</div>
+      <p>Up to 3 generations</p>
+    </div>
+    <div class="info-box">
+      <div class="label">Pro</div>
+      <div class="value">€20/month</div>
+      <p>Unlimited generations, 3D exports, project history</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Usage</h2>
+  <div id="usageInfo">Loading...</div>
+</div>
+
+<div class="card">
+  <h2>Project History</h2>
+  <div id="historyList">No history yet.</div>
+</div>
+
+  <div class="card">
+    <h2>House Summary</h2>
+    <div class="grid" id="houseSummary">
+      <div class="info-box"><div class="label">Style</div><div class="value" id="styleValue">-</div></div>
+      <div class="info-box"><div class="label">Bedrooms</div><div class="value" id="bedroomsValue">-</div></div>
+      <div class="info-box"><div class="label">Bathrooms</div><div class="value" id="bathroomsValue">-</div></div>
+      <div class="info-box"><div class="label">Area (m²)</div><div class="value" id="areaValue">-</div></div>
+      <div class="info-box"><div class="label">Floors</div><div class="value" id="floorsValue">-</div></div>
+      <div class="info-box"><div class="label">Garage</div><div class="value" id="garageValue">-</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Usage</h2>
+    <div class="grid">
+      <div class="info-box"><div class="label">Input Tokens</div><div class="value" id="inputTokensValue">-</div></div>
+      <div class="info-box"><div class="label">Output Tokens</div><div class="value" id="outputTokensValue">-</div></div>
+      <div class="info-box"><div class="label">Total Tokens</div><div class="value" id="totalTokensValue">-</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3D Model Preview</h2>
+    <model-viewer
+      id="viewer"
+      style="display:none;"
+      alt="Generated 3D house model"
+      camera-controls
+      auto-rotate
+      shadow-intensity="1"
+      exposure="1"
+      ar>
+    </model-viewer>
+    <div id="viewerMessage">No model yet.</div>
+  </div>
+
+  <div class="card">
+    <h2>Project Files</h2>
+    <div id="fileLinks"></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw API Response</h2>
+    <pre id="result">Waiting for input...</pre>
+  </div>
+
+  <script>
+  const MAX_FREE_GENERATIONS = 999;
+
+  function showUpgradeMessage() {
+    alert("Pro plan: €20/month. Next step is connecting Stripe for real payments.");
+  }
+
+  function saveCurrentUser(user) {
+  localStorage.setItem("currentUser", JSON.stringify(user));
+}
+
+function getCurrentUser() {
+  return JSON.parse(localStorage.getItem("currentUser") || "null");
+}
+
+function updateAuthUI() {
+  const user = getCurrentUser();
+  const authStatus = document.getElementById("authStatus");
+
+  if (user) {
+    authStatus.textContent = `Logged in as ${user.email} ${user.is_pro ? "(Pro)" : "(Free)"}`;
+  } else {
+    authStatus.textContent = "Not logged in";
+  }
+}
+
+async function signupUser() {
+  const email = document.getElementById("emailInput").value;
+  const password = document.getElementById("passwordInput").value;
+  const authStatus = document.getElementById("authStatus");
+
+  try {
+    const response = await fetch("http://127.0.0.1:8000/signup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email, password })
+    });
+
+    const data = await response.json();
+    authStatus.textContent = data.message;
+  } catch (error) {
+    authStatus.textContent = "Signup failed";
+  }
+}
+
+async function loginUser() {
+  const email = document.getElementById("emailInput").value;
+  const password = document.getElementById("passwordInput").value;
+  const authStatus = document.getElementById("authStatus");
+  loadUserProjects();
+
+  try {
+    const response = await fetch("http://127.0.0.1:8000/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email, password })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      saveCurrentUser(data.user);
+      updateAuthUI();
+    } else {
+      authStatus.textContent = data.message;
+    }
+  } catch (error) {
+    authStatus.textContent = "Login failed";
+  }
+}
+
+  function getUsageCount() {
+    return parseInt(localStorage.getItem("usageCount") || "0");
+  }
+
+  function incrementUsage() {
+    let count = getUsageCount();
+    count++;
+    localStorage.setItem("usageCount", count);
+  }
+
+  function canGenerate() {
+    return getUsageCount() < MAX_FREE_GENERATIONS;
+  }
+
+  function updateUsageUI() {
+    const usage = getUsageCount();
+    document.getElementById("usageInfo").textContent =
+      `Free usage: ${usage} / ${MAX_FREE_GENERATIONS}`;
+  }
+
+  function saveToHistory(project) {
+    let history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
+    history.unshift(project);
+    history = history.slice(0, 10);
+    localStorage.setItem("projectHistory", JSON.stringify(history));
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
+    const container = document.getElementById("historyList");
+
+    if (!container) return;
+
+    if (history.length === 0) {
+      container.innerHTML = "No history yet.";
+      return;
+    }
+
+    container.innerHTML = history.map((item, index) => `
+      <div style="margin-bottom:10px;">
+        <a href="#" onclick="loadProject(${index}); return false;">
+          ${item.project_id}
+        </a>
+      </div>
+    `).join("");
+  }
+
+  function loadProject(index) {
+    const history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
+    const project = history[index];
+    if (project) {
+      displayResult(project);
+    }
+  }
+
+  function displayResult(data) {
+    const result = document.getElementById("result");
+    const fileLinks = document.getElementById("fileLinks");
+    const viewer = document.getElementById("viewer");
+    const viewerMessage = document.getElementById("viewerMessage");
+
+    if (result) {
+      result.textContent = JSON.stringify(data, null, 2);
+    }
+
+    const projectInfo = document.getElementById("projectInfo");
+    if (projectInfo) {
+      projectInfo.textContent = "Project ID: " + (data.project_id || "-");
+    }
+
+    if (data.house_data) {
+      document.getElementById("styleValue").textContent = data.house_data.style ?? "-";
+      document.getElementById("bedroomsValue").textContent = data.house_data.bedrooms ?? "-";
+      document.getElementById("bathroomsValue").textContent = data.house_data.bathrooms ?? "-";
+      document.getElementById("areaValue").textContent = data.house_data.area_m2 ?? "-";
+      document.getElementById("floorsValue").textContent = data.house_data.floors ?? "-";
+      document.getElementById("garageValue").textContent = data.house_data.garage ? "Yes" : "No";
+    }
+
+    if (data.usage) {
+      document.getElementById("inputTokensValue").textContent = data.usage.input_tokens ?? "-";
+      document.getElementById("outputTokensValue").textContent = data.usage.output_tokens ?? "-";
+      document.getElementById("totalTokensValue").textContent = data.usage.total_tokens ?? "-";
+    }
+
+    if (data.files && data.files.glb_file && viewer) {
+      viewer.src = data.files.glb_file + "?t=" + new Date().getTime();
+      viewer.style.display = "block";
+      if (viewerMessage) viewerMessage.textContent = "";
+    } else {
+      if (viewer) viewer.style.display = "none";
+      if (viewerMessage) viewerMessage.textContent = "No GLB model found.";
+    }
+
+    if (data.files && fileLinks) {
+  fileLinks.innerHTML = `
+    <a href="${data.files.glb_file}" target="_blank">Open GLB file</a><br>
+    <a href="${data.files.blend_file}" target="_blank">Open Blender file</a><br>
+    <a href="${data.files.house_data_json}" target="_blank">Open House Data JSON</a><br>
+    <a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>
+  `;
+}
+  }
+
+  async function generateHouse() {
+  const prompt = document.getElementById("promptInput").value;
+  const status = document.getElementById("status");
+  const button = document.getElementById("generateBtn");
+  const loader = document.getElementById("loader");
+  const user = getCurrentUser();
+
+  if (!canGenerate()) {
+    status.textContent = "Free limit reached (3/3). Upgrade to continue.";
+    return;
+  }
+
+  if (!prompt.trim()) {
+    status.textContent = "Please enter a house description.";
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Generating...";
+  loader.style.display = "block";
+  status.textContent = "";
+
+  try {
+    const response = await fetch("http://127.0.0.1:8000/generate-house", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: prompt,
+        user_id: user ? user.id : null
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Request failed");
+    }
+
+    displayResult(data);
+    saveToHistory(data);
+
+    incrementUsage();
+    updateUsageUI();
+
+    status.textContent = "Done.";
+  } catch (error) {
+    status.textContent = "Request failed: " + error.message;
+    console.error(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Generate House";
+    loader.style.display = "none";
+  }
+}
+
+async function loadUserProjects() {
+  const user = getCurrentUser();
+  const container = document.getElementById("historyList");
+
+  if (!user) {
+    container.innerHTML = "Login to see your projects.";
+    return;
+  }
+
+  try {
+    const response = await fetch(`http://127.0.0.1:8000/my-projects/${user.id}`);
+    const data = await response.json();
+
+    if (!data.projects || data.projects.length === 0) {
+      container.innerHTML = "No projects yet.";
+      return;
+    }
+
+    container.innerHTML = data.projects.map((p, index) => `
+      <div style="margin-bottom:10px;">
+        <strong>${p.project_id}</strong><br>
+        <small>${p.prompt}</small><br>
+        <small>${p.created_at}</small><br>
+        <button onclick="loadProjectFromServer('${p.project_id}')">Open</button>
+      </div>
+    `).join("");
+
+  } catch (error) {
+    container.innerHTML = "Failed to load projects.";
+  }
+}
+
+function loadProjectFromServer(projectId) {
+  const base = `http://127.0.0.1:8000/outputs/${projectId}`;
+
+  const data = {
+    project_id: projectId,
+    house_data: null,
+    layout_data: null,
+    files: {
+      house_data_json: `${base}/house_data.json`,
+      layout_data_json: `${base}/layout_data.json`,
+      blend_file: `${base}/generated_house.blend`,
+      glb_file: `${base}/generated_house.glb`
+    }
+  };
+
+  displayResult(data);
+}
+
+loadUserProjects();
+updateUsageUI();
+updateAuthUI();
+</script>
