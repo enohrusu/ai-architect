@@ -153,13 +153,13 @@ def generate_house(request: HouseRequest):
         json.dump(layout_data, f, indent=2)
 
     if BLENDER_WORKER_URL:
-    try:
-        requests.post(
-            f"{BLENDER_WORKER_URL}/run-blender",
-            json={"project_folder": project_folder}
-        )
-    except Exception as e:
-        print("Blender worker failed:", e)
+        try:
+            requests.post(
+                f"{BLENDER_WORKER_URL}/run-blender",
+                json={"project_folder": project_folder}
+            )
+        except Exception as e:
+            print("Blender worker failed:", e)
 
     conn = get_connection()
     cursor = conn.cursor()
