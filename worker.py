@@ -1,10 +1,17 @@
 import os
 import json
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from blender_runner import run_blender
 
 app = FastAPI()
+
+project_root = os.path.dirname(os.path.abspath(__file__))
+outputs_dir = os.path.join(project_root, "outputs")
+os.makedirs(outputs_dir, exist_ok=True)
+
+app.mount("/outputs", StaticFiles(directory=outputs_dir), name="outputs")
 
 
 class BlenderJobRequest(BaseModel):
@@ -21,8 +28,7 @@ def home():
 @app.post("/run-blender")
 def run_blender_endpoint(data: BlenderJobRequest):
     try:
-        project_root = os.path.dirname(os.path.abspath(__file__))
-        project_folder = os.path.join(project_root, "outputs", data.project_id)
+        project_folder = os.path.join(outputs_dir, data.project_id)
         os.makedirs(project_folder, exist_ok=True)
 
         house_data_path = os.path.join(project_folder, "house_data.json")

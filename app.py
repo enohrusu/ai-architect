@@ -154,6 +154,8 @@ def generate_house(request: HouseRequest):
         json.dump(layout_data, f, indent=2)
    
     blender_result = {"success": False, "message": "Blender worker not configured"}
+    worker_glb_url = None
+
     if BLENDER_WORKER_URL:
         print("➡️ Calling Blender worker:", BLENDER_WORKER_URL)
 
@@ -177,6 +179,9 @@ def generate_house(request: HouseRequest):
                     "success": False,
                     "message": f"Invalid worker response: {response.text}"
                 }
+
+            if blender_result.get("success"):
+                worker_glb_url = f"{BLENDER_WORKER_URL}/outputs/{project_id}/generated_house.glb"
 
         except Exception as e:
             print("❌ Blender error:", str(e))
@@ -229,7 +234,7 @@ def generate_house(request: HouseRequest):
         "files": {
     "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
     "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
-    "glb_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.glb" if blender_result.get("success") else None,
+    "glb_file": worker_glb_url
 }
     }
 
