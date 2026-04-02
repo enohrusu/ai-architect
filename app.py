@@ -160,13 +160,23 @@ def generate_house(request: HouseRequest):
         try:
             response = requests.post(
                 f"{BLENDER_WORKER_URL}/run-blender",
-                json={"project_folder": project_folder},
+                json={
+                    "project_id": project_id,
+                    "house_data": house_data,
+                    "layout_data": layout_data
+                },
                 timeout=120
             )
 
             print("✅ Worker status:", response.status_code)
 
-            blender_result = response.json()
+            try:
+                blender_result = response.json()
+            except Exception:
+                blender_result = {
+                    "success": False,
+                    "message": f"Invalid worker response: {response.text}"
+                }
 
         except Exception as e:
             print("❌ Blender error:", str(e))
