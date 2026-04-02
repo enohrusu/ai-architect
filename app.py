@@ -152,9 +152,8 @@ def generate_house(request: HouseRequest):
     layout_data_path = os.path.join(project_folder, "layout_data.json")
     with open(layout_data_path, "w", encoding="utf-8") as f:
         json.dump(layout_data, f, indent=2)
-
-       blender_result = {"success": False, "message": "Blender worker not configured"}
-
+   
+    blender_result = {"success": False, "message": "Blender worker not configured"}
     if BLENDER_WORKER_URL:
         print("➡️ Calling Blender worker:", BLENDER_WORKER_URL)
 
@@ -175,7 +174,7 @@ def generate_house(request: HouseRequest):
     else:
         print("❌ BLENDER_WORKER_URL not set")
 
-        
+
     conn = get_connection()
     cursor = conn.cursor()
 
