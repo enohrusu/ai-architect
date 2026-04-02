@@ -157,6 +157,11 @@ button:disabled {
 </div>
 
 <div class="card">
+  <h2>Generation Status</h2>
+  <div id="generationStatus">No generation yet.</div>
+</div>
+
+<div class="card">
   <h2>Pricing</h2>
   <div class="grid">
     <div class="info-box">
@@ -229,8 +234,7 @@ button:disabled {
   </div>
 
   <script>
-  const MAX_FREE_GENERATIONS = 999;
-
+  
   function showUpgradeMessage() {
     alert("Pro plan: €20/month. Next step is connecting Stripe for real payments.");
   }
@@ -303,20 +307,6 @@ async function loginUser() {
   }
 }
 
-  function getUsageCount() {
-    return parseInt(localStorage.getItem("usageCount") || "0");
-  }
-
-  function incrementUsage() {
-    let count = getUsageCount();
-    count++;
-    localStorage.setItem("usageCount", count);
-  }
-
-  function canGenerate() {
-    return getUsageCount() < MAX_FREE_GENERATIONS;
-  }
-
   function updateUsageUI() {
   const user = getCurrentUser();
   const usageInfo = document.getElementById("usageInfo");
@@ -330,47 +320,21 @@ async function loginUser() {
   usageInfo.textContent = `Free usage: ${count} / 3`;
 }
 
-  function saveToHistory(project) {
-    let history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
-    history.unshift(project);
-    history = history.slice(0, 10);
-    localStorage.setItem("projectHistory", JSON.stringify(history));
-    renderHistory();
-  }
-
-  function renderHistory() {
-    const history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
-    const container = document.getElementById("historyList");
-
-    if (!container) return;
-
-    if (history.length === 0) {
-      container.innerHTML = "No history yet.";
-      return;
-    }
-
-    container.innerHTML = history.map((item, index) => `
-      <div style="margin-bottom:10px;">
-        <a href="#" onclick="loadProject(${index}); return false;">
-          ${item.project_id}
-        </a>
-      </div>
-    `).join("");
-  }
-
-  function loadProject(index) {
-    const history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
-    const project = history[index];
-    if (project) {
-      displayResult(project);
-    }
-  }
 
   function displayResult(data) {
     const result = document.getElementById("result");
     const fileLinks = document.getElementById("fileLinks");
     const viewer = document.getElementById("viewer");
     const viewerMessage = document.getElementById("viewerMessage");
+
+    const generationStatus = document.getElementById("generationStatus");
+
+if (data.blender_result) {
+  generationStatus.textContent = data.blender_result.success
+    ? "3D model generated successfully."
+    : `3D generation unavailable: ${data.blender_result.message}`;
+}
+
 
     if (result) {
       result.textContent = JSON.stringify(data, null, 2);
@@ -413,7 +377,11 @@ async function loginUser() {
   }
 
   if (data.files.layout_data_json) {
-    links += `<a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>`;
+    links += `<a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a><br>`;
+  }
+
+  if (data.files.glb_file) {
+    links += `<a href="${data.files.glb_file}" target="_blank">Open 3D GLB File</a>`;
   }
 
   fileLinks.innerHTML = links || "No downloadable files available.";
@@ -457,7 +425,6 @@ async function loginUser() {
     }
 
     displayResult(data);
-    saveToHistory(data);
 
     if (data.user_usage) {
   const user = getCurrentUser();
@@ -520,7 +487,11 @@ function openSavedProject(index) {
     project_id: p.project_id,
     house_data: p.house_data,
     layout_data: p.layout_data,
-    files: {}
+    files: {
+      house_data_json: null,
+      layout_data_json: null,
+      glb_file: null
+    }
   };
 
   displayResult(data);
