@@ -409,7 +409,7 @@ async function loginUser() {
     links += `<a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>`;
   }
 
-  fileLinks.innerHTML = links || "No downloadable files available in the online version.";
+  fileLinks.innerHTML = links || "No downloadable files available.";
 }
   }
 
@@ -511,10 +511,7 @@ function openSavedProject(index) {
     project_id: p.project_id,
     house_data: p.house_data,
     layout_data: p.layout_data,
-    files: {
-      house_data_json: null,
-      layout_data_json: null
-    }
+    files: {}
   };
 
   displayResult(data);
