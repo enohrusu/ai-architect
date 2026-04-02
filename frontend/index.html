@@ -390,18 +390,16 @@ async function loginUser() {
     }
 
     if (data.files && data.files.glb_file && viewer) {
-      viewer.src = data.files.glb_file + "?t=" + new Date().getTime();
-      viewer.style.display = "block";
-      if (viewerMessage) viewerMessage.textContent = "";
-    } else {
-      if (viewer) viewer.style.display = "none";
-      if (viewerMessage) viewerMessage.textContent = "No GLB model found.";
-    }
+  viewer.src = data.files.glb_file + "?t=" + new Date().getTime();
+  viewer.style.display = "block";
+  if (viewerMessage) viewerMessage.textContent = "";
+} else {
+  if (viewer) viewer.style.display = "none";
+  if (viewerMessage) viewerMessage.textContent = "3D preview unavailable in the online version.";
+}
 
     if (data.files && fileLinks) {
   fileLinks.innerHTML = `
-    <a href="${data.files.glb_file}" target="_blank">Open GLB file</a><br>
-    <a href="${data.files.blend_file}" target="_blank">Open Blender file</a><br>
     <a href="${data.files.house_data_json}" target="_blank">Open House Data JSON</a><br>
     <a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>
   `;
@@ -506,9 +504,7 @@ function loadProjectFromServer(projectId) {
     layout_data: null,
     files: {
       house_data_json: `${base}/house_data.json`,
-      layout_data_json: `${base}/layout_data.json`,
-      blend_file: `${base}/generated_house.blend`,
-      glb_file: `${base}/generated_house.glb`
+      layout_data_json: `${base}/layout_data.json`
     }
   };
 

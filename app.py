@@ -145,8 +145,6 @@ def generate_house(request: HouseRequest):
         "files": {
     "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
     "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
-    "blend_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.blend",
-    "glb_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.glb"
 }
     }
 
