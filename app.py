@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
+
 BLENDER_WORKER_URL = os.getenv("BLENDER_WORKER_URL")
 
 from auth import create_user, authenticate_user
@@ -152,15 +153,29 @@ def generate_house(request: HouseRequest):
     with open(layout_data_path, "w", encoding="utf-8") as f:
         json.dump(layout_data, f, indent=2)
 
-    if BLENDER_WORKER_URL:
-        try:
-            requests.post(
-                f"{BLENDER_WORKER_URL}/run-blender",
-                json={"project_folder": project_folder}
-            )
-        except Exception as e:
-            print("Blender worker failed:", e)
+       blender_result = {"success": False, "message": "Blender worker not configured"}
 
+    if BLENDER_WORKER_URL:
+        print("➡️ Calling Blender worker:", BLENDER_WORKER_URL)
+
+        try:
+            response = requests.post(
+                f"{BLENDER_WORKER_URL}/run-blender",
+                json={"project_folder": project_folder},
+                timeout=120
+            )
+
+            print("✅ Worker status:", response.status_code)
+
+            blender_result = response.json()
+
+        except Exception as e:
+            print("❌ Blender error:", str(e))
+            blender_result = {"success": False, "message": str(e)}
+    else:
+        print("❌ BLENDER_WORKER_URL not set")
+
+        
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -192,6 +207,7 @@ def generate_house(request: HouseRequest):
         "project_folder": project_folder,
         "house_data": house_data,
         "layout_data": layout_data,
+        "blender_result": blender_result,
         "usage": {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
@@ -202,9 +218,10 @@ def generate_house(request: HouseRequest):
             "max_free_generations": MAX_FREE_GENERATIONS
         },
         "files": {
-            "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
-            "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
-        }
+    "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
+    "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
+    "glb_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.glb" if blender_result.get("success") else None,
+}
     }
 
 @app.get("/my-projects/{user_id}")
