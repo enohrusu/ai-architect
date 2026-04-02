@@ -1,5 +1,6 @@
 import os
 import json
+import requests
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
+BLENDER_WORKER_URL = os.getenv("BLENDER_WORKER_URL")
 
 from auth import create_user, authenticate_user
 from database import get_connection, init_db
@@ -150,7 +152,14 @@ def generate_house(request: HouseRequest):
     with open(layout_data_path, "w", encoding="utf-8") as f:
         json.dump(layout_data, f, indent=2)
 
-    # run_blender(project_folder)
+    if BLENDER_WORKER_URL:
+    try:
+        requests.post(
+            f"{BLENDER_WORKER_URL}/run-blender",
+            json={"project_folder": project_folder}
+        )
+    except Exception as e:
+        print("Blender worker failed:", e)
 
     conn = get_connection()
     cursor = conn.cursor()
