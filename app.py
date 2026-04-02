@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from blender_runner import run_blender
 load_dotenv(dotenv_path=".env")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+MAX_FREE_GENERATIONS = 3
 
 app = FastAPI()
 init_db()
@@ -103,6 +104,36 @@ def login(request: UserRequest):
 
 @app.post("/generate-house")
 def generate_house(request: HouseRequest):
+    user_id = request.user_id or 0
+
+    generation_count = 0
+    is_pro = False
+
+    if user_id:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT is_pro, generation_count FROM users WHERE id = %s",
+            (user_id,)
+        )
+        user_row = cursor.fetchone()
+
+        if not user_row:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="User not found")
+
+        is_pro, generation_count = user_row
+
+        if not is_pro and generation_count >= MAX_FREE_GENERATIONS:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=403, detail="Free limit reached. Upgrade to continue.")
+
+        cursor.close()
+        conn.close()
+
     project_id = create_project_id()
     project_folder = os.path.join("outputs", project_id)
     os.makedirs(project_folder, exist_ok=True)
@@ -121,20 +152,29 @@ def generate_house(request: HouseRequest):
 
     # run_blender(project_folder)
 
-    # Save project to database
     conn = get_connection()
     cursor = conn.cursor()
+
     cursor.execute(
-    "INSERT INTO projects (user_id, project_id, prompt, house_data, layout_data) VALUES (?, ?, ?, ?, ?)",
-    (
-        request.user_id or 0,
-        project_id,
-        request.prompt,
-        json.dumps(house_data),
-        json.dumps(layout_data)
+        "INSERT INTO projects (user_id, project_id, prompt, house_data, layout_data) VALUES (%s, %s, %s, %s, %s)",
+        (
+            user_id,
+            project_id,
+            request.prompt,
+            json.dumps(house_data),
+            json.dumps(layout_data)
+        )
     )
-)
+
+    if user_id:
+        cursor.execute(
+            "UPDATE users SET generation_count = generation_count + 1 WHERE id = %s",
+            (user_id,)
+        )
+        generation_count += 1
+
     conn.commit()
+    cursor.close()
     conn.close()
 
     return {
@@ -148,10 +188,14 @@ def generate_house(request: HouseRequest):
             "output_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens
         },
+        "user_usage": {
+            "generation_count": generation_count,
+            "max_free_generations": MAX_FREE_GENERATIONS
+        },
         "files": {
-    "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
-    "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
-}
+            "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
+            "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
+        }
     }
 
 @app.get("/my-projects/{user_id}")
@@ -160,11 +204,12 @@ def get_user_projects(user_id: int):
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT project_id, prompt, house_data, layout_data, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC",
+        "SELECT project_id, prompt, house_data, layout_data, created_at FROM projects WHERE user_id = %s ORDER BY created_at DESC",
         (user_id,)
     )
 
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     projects = []
@@ -174,7 +219,7 @@ def get_user_projects(user_id: int):
             "prompt": row[1],
             "house_data": json.loads(row[2]) if row[2] else None,
             "layout_data": json.loads(row[3]) if row[3] else None,
-            "created_at": row[4]
+            "created_at": str(row[4])
         })
 
     return {"projects": projects}

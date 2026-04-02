@@ -318,10 +318,17 @@ async function loginUser() {
   }
 
   function updateUsageUI() {
-    const usage = getUsageCount();
-    document.getElementById("usageInfo").textContent =
-      `Free usage: ${usage} / ${MAX_FREE_GENERATIONS}`;
+  const user = getCurrentUser();
+  const usageInfo = document.getElementById("usageInfo");
+
+  if (!user) {
+    usageInfo.textContent = "Login to track usage.";
+    return;
   }
+
+  const count = user.generation_count ?? 0;
+  usageInfo.textContent = `Free usage: ${count} / 3`;
+}
 
   function saveToHistory(project) {
     let history = JSON.parse(localStorage.getItem("projectHistory") || "[]");
@@ -420,10 +427,6 @@ async function loginUser() {
   const loader = document.getElementById("loader");
   const user = getCurrentUser();
 
-  if (!canGenerate()) {
-    status.textContent = "Free limit reached (3/3). Upgrade to continue.";
-    return;
-  }
 
   if (!prompt.trim()) {
     status.textContent = "Please enter a house description.";
@@ -456,8 +459,14 @@ async function loginUser() {
     displayResult(data);
     saveToHistory(data);
 
-    incrementUsage();
+    if (data.user_usage) {
+  const user = getCurrentUser();
+  if (user) {
+    user.generation_count = data.user_usage.generation_count;
+    saveCurrentUser(user);
     updateUsageUI();
+  }
+}
 
     status.textContent = "Done.";
   } catch (error) {

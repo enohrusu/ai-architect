@@ -26,13 +26,19 @@ CREATE TABLE IF NOT EXISTS projects (
 """)
 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        is_pro INTEGER DEFAULT 0
-    )
-    """)
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    is_pro INTEGER DEFAULT 0,
+    generation_count INTEGER DEFAULT 0
+)
+""")
+
+    cursor.execute("""
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS generation_count INTEGER DEFAULT 0
+""")
 
     conn.commit()
     conn.close()
