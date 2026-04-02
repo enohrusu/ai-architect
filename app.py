@@ -143,11 +143,11 @@ def generate_house(request: HouseRequest):
             "total_tokens": usage.total_tokens
         },
         "files": {
-            "house_data_json": f"http://127.0.0.1:8000/{project_folder.replace(os.sep, '/')}/house_data.json",
-            "layout_data_json": f"http://127.0.0.1:8000/{project_folder.replace(os.sep, '/')}/layout_data.json",
-            "blend_file": f"http://127.0.0.1:8000/{project_folder.replace(os.sep, '/')}/generated_house.blend",
-            "glb_file": f"http://127.0.0.1:8000/{project_folder.replace(os.sep, '/')}/generated_house.glb"
-        }
+    "house_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/house_data.json",
+    "layout_data_json": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/layout_data.json",
+    "blend_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.blend",
+    "glb_file": f"https://ai-architect-ow3t.onrender.com/outputs/{project_id}/generated_house.glb"
+}
     }
 
 @app.get("/my-projects/{user_id}")
