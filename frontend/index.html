@@ -399,10 +399,17 @@ async function loginUser() {
 }
 
     if (data.files && fileLinks) {
-  fileLinks.innerHTML = `
-    <a href="${data.files.house_data_json}" target="_blank">Open House Data JSON</a><br>
-    <a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>
-  `;
+  let links = "";
+
+  if (data.files.house_data_json) {
+    links += `<a href="${data.files.house_data_json}" target="_blank">Open House Data JSON</a><br>`;
+  }
+
+  if (data.files.layout_data_json) {
+    links += `<a href="${data.files.layout_data_json}" target="_blank">Open Layout Data JSON</a>`;
+  }
+
+  fileLinks.innerHTML = links || "No downloadable files available in the online version.";
 }
   }
 
@@ -481,18 +488,36 @@ async function loadUserProjects() {
       return;
     }
 
+    window.userProjects = data.projects;
+
     container.innerHTML = data.projects.map((p, index) => `
       <div style="margin-bottom:10px;">
         <strong>${p.project_id}</strong><br>
         <small>${p.prompt}</small><br>
         <small>${p.created_at}</small><br>
-        <button onclick="loadProjectFromServer('${p.project_id}')">Open</button>
+        <button onclick="openSavedProject(${index})">Open</button>
       </div>
     `).join("");
 
   } catch (error) {
     container.innerHTML = "Failed to load projects.";
   }
+}
+
+function openSavedProject(index) {
+  const p = window.userProjects[index];
+
+  const data = {
+    project_id: p.project_id,
+    house_data: p.house_data,
+    layout_data: p.layout_data,
+    files: {
+      house_data_json: null,
+      layout_data_json: null
+    }
+  };
+
+  displayResult(data);
 }
 
 function loadProjectFromServer(projectId) {

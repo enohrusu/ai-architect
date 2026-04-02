@@ -125,9 +125,15 @@ def generate_house(request: HouseRequest):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO projects (user_id, project_id, prompt) VALUES (?, ?, ?)",
-        (request.user_id or 0, project_id, request.prompt)
+    "INSERT INTO projects (user_id, project_id, prompt, house_data, layout_data) VALUES (?, ?, ?, ?, ?)",
+    (
+        request.user_id or 0,
+        project_id,
+        request.prompt,
+        json.dumps(house_data),
+        json.dumps(layout_data)
     )
+)
     conn.commit()
     conn.close()
 
@@ -154,7 +160,7 @@ def get_user_projects(user_id: int):
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT project_id, prompt, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC",
+        "SELECT project_id, prompt, house_data, layout_data, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,)
     )
 
@@ -166,7 +172,9 @@ def get_user_projects(user_id: int):
         projects.append({
             "project_id": row[0],
             "prompt": row[1],
-            "created_at": row[2]
+            "house_data": json.loads(row[2]) if row[2] else None,
+            "layout_data": json.loads(row[3]) if row[3] else None,
+            "created_at": row[4]
         })
 
     return {"projects": projects}

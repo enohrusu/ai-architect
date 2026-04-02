@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS projects (
     user_id INTEGER,
     project_id TEXT,
     prompt TEXT,
+    house_data TEXT,
+    layout_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
