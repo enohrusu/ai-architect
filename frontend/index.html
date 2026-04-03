@@ -501,9 +501,9 @@ function openSavedProject(index) {
     house_data: p.house_data,
     layout_data: p.layout_data,
     files: {
-      house_data_json: null,
-      layout_data_json: null,
-      glb_file: p.glb_url || null
+      house_data_json: `https://monocotyledonous-reconcilably-else.ngrok-free.dev/outputs/${p.project_id}/house_data.json`,
+      layout_data_json: `https://monocotyledonous-reconcilably-else.ngrok-free.dev/outputs/${p.project_id}/layout_data.json`,
+      glb_file: `https://ai-architect-ow3t.onrender.com/proxy-glb/${p.project_id}`
     }
   };
 

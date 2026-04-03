@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
+from fastapi.responses import StreamingResponse
 
 BLENDER_WORKER_URL = os.getenv("BLENDER_WORKER_URL")
 
@@ -238,6 +239,26 @@ def generate_house(request: HouseRequest):
     "glb_file": worker_glb_url
 }
     }
+
+@app.get("/proxy-glb/{project_id}")
+def proxy_glb(project_id: str):
+    if not BLENDER_WORKER_URL:
+        raise HTTPException(status_code=500, detail="BLENDER_WORKER_URL not set")
+
+    worker_glb_url = f"https://ai-architect-ow3t.onrender.com/proxy-glb/{project_id}"
+
+    try:
+        response = requests.get(worker_glb_url, stream=True, timeout=120)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach worker: {str(e)}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="GLB not found on worker")
+
+    return StreamingResponse(
+        response.iter_content(chunk_size=8192),
+        media_type="model/gltf-binary"
+    )
 
 @app.get("/my-projects/{user_id}")
 def get_user_projects(user_id: int):
