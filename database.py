@@ -38,6 +38,11 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS glb_url TEXT
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
