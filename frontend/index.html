@@ -369,10 +369,14 @@ if (data.blender_result) {
   const glbUrl = data.files.glb_file + "?t=" + new Date().getTime();
   console.log("GLB URL:", glbUrl);
 
-  viewer.style.display = "block";
-  viewer.src = glbUrl;
-  viewer.setAttribute("src", glbUrl);
-  viewer.setAttribute("reveal", "auto");
+  viewer.style.display = "none";
+  viewer.removeAttribute("src");
+
+  setTimeout(() => {
+    viewer.src = glbUrl;
+    viewer.style.display = "block";
+    viewer.setAttribute("reveal", "auto");
+  }, 100);
 
   if (viewerMessage) {
     viewerMessage.textContent = "Loading 3D model...";

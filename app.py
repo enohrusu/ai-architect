@@ -183,7 +183,7 @@ def generate_house(request: HouseRequest):
                 }
 
             if blender_result.get("success"):
-                worker_glb_url = f"{BLENDER_WORKER_URL}/outputs/{project_id}/generated_house.glb"
+    worker_glb_url = f"https://ai-architect-ow3t.onrender.com/proxy-glb/{project_id}"
 
         except Exception as e:
             print("❌ Blender error:", str(e))
