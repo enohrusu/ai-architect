@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
 from fastapi.responses import StreamingResponse
+from fastapi import Response
 
 BLENDER_WORKER_URL = os.getenv("BLENDER_WORKER_URL")
 
@@ -245,18 +246,18 @@ def proxy_glb(project_id: str):
     if not BLENDER_WORKER_URL:
         raise HTTPException(status_code=500, detail="BLENDER_WORKER_URL not set")
 
-    worker_glb_url = f"https://ai-architect-ow3t.onrender.com/proxy-glb/{project_id}"
+    worker_glb_url = f"{BLENDER_WORKER_URL}/outputs/{project_id}/generated_house.glb"
 
     try:
-        response = requests.get(worker_glb_url, stream=True, timeout=120)
+        response = requests.get(worker_glb_url, timeout=120)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach worker: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
 
     if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="GLB not found on worker")
+        raise HTTPException(status_code=response.status_code, detail="GLB not found")
 
-    return StreamingResponse(
-        response.iter_content(chunk_size=8192),
+    return Response(
+        content=response.content,
         media_type="model/gltf-binary"
     )
 
