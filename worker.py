@@ -2,10 +2,19 @@ import os
 import json
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from blender_runner import run_blender
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 outputs_dir = os.path.join(project_root, "outputs")

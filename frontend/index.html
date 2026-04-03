@@ -366,10 +366,17 @@ if (data.blender_result) {
     console.log("GLB URL:", data.files?.glb_file);
 
     if (data.files && data.files.glb_file && viewer) {
-  viewer.src = data.files.glb_file + "?t=" + new Date().getTime();
+  const glbUrl = data.files.glb_file + "?t=" + new Date().getTime();
+  console.log("GLB URL:", glbUrl);
+
   viewer.style.display = "block";
+  viewer.src = glbUrl;
+  viewer.setAttribute("src", glbUrl);
   viewer.setAttribute("reveal", "auto");
-  if (viewerMessage) viewerMessage.textContent = "";
+
+  if (viewerMessage) {
+    viewerMessage.textContent = "Loading 3D model...";
+  }
 } else {
   if (viewer) viewer.style.display = "none";
   if (viewerMessage) viewerMessage.textContent = "3D preview not available yet.";
@@ -517,6 +524,21 @@ function loadProjectFromServer(projectId) {
   };
 
   displayResult(data);
+}
+
+const viewer = document.getElementById("viewer");
+const viewerMessage = document.getElementById("viewerMessage");
+
+if (viewer) {
+  viewer.addEventListener("load", () => {
+    console.log("Model loaded successfully");
+    if (viewerMessage) viewerMessage.textContent = "";
+  });
+
+  viewer.addEventListener("error", (event) => {
+    console.error("Model viewer error:", event);
+    if (viewerMessage) viewerMessage.textContent = "Failed to load 3D model.";
+  });
 }
 
 loadUserProjects();
