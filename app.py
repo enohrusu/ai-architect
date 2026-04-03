@@ -241,6 +241,9 @@ def generate_house(request: HouseRequest):
 }
     }
 
+from fastapi.responses import StreamingResponse
+import requests
+
 @app.get("/proxy-glb/{project_id}")
 def proxy_glb(project_id: str):
     if not BLENDER_WORKER_URL:
@@ -249,16 +252,19 @@ def proxy_glb(project_id: str):
     worker_glb_url = f"{BLENDER_WORKER_URL}/outputs/{project_id}/generated_house.glb"
 
     try:
-        response = requests.get(worker_glb_url, timeout=120)
+        response = requests.get(worker_glb_url, stream=True, timeout=120)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail="GLB not found")
 
-    return Response(
-        content=response.content,
-        media_type="model/gltf-binary"
+    return StreamingResponse(
+        response.raw,   # 🔥 THIS IS THE KEY FIX
+        media_type="model/gltf-binary",
+        headers={
+            "Content-Disposition": f'inline; filename="{project_id}.glb"'
+        }
     )
 
 @app.get("/my-projects/{user_id}")
