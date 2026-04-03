@@ -25,7 +25,7 @@ def init_db():
     )
     """)
 
-    cursor.execute("""
+        cursor.execute("""
     CREATE TABLE IF NOT EXISTS projects (
         id SERIAL PRIMARY KEY,
         user_id INTEGER,
@@ -35,6 +35,11 @@ def init_db():
         layout_data TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+    """)
+
+    cursor.execute("""
+    ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS glb_url TEXT
     """)
 
     conn.commit()

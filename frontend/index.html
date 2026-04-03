@@ -211,15 +211,18 @@ button:disabled {
   <div class="card">
     <h2>3D Model Preview</h2>
     <model-viewer
-      id="viewer"
-      style="display:none;"
-      alt="Generated 3D house model"
-      camera-controls
-      auto-rotate
-      shadow-intensity="1"
-      exposure="1"
-      ar>
-    </model-viewer>
+  id="viewer"
+  style="display:none;"
+  alt="Generated 3D house model"
+  camera-controls
+  auto-rotate
+  shadow-intensity="1"
+  exposure="1"
+  reveal="auto"
+  loading="eager"
+  crossorigin="anonymous"
+  ar>
+</model-viewer>
     <div id="viewerMessage">No model yet.</div>
   </div>
 
@@ -360,13 +363,16 @@ if (data.blender_result) {
       document.getElementById("totalTokensValue").textContent = data.usage.total_tokens ?? "-";
     }
 
+    console.log("GLB URL:", data.files?.glb_file);
+
     if (data.files && data.files.glb_file && viewer) {
   viewer.src = data.files.glb_file + "?t=" + new Date().getTime();
   viewer.style.display = "block";
+  viewer.setAttribute("reveal", "auto");
   if (viewerMessage) viewerMessage.textContent = "";
 } else {
   if (viewer) viewer.style.display = "none";
-  if (viewerMessage) viewerMessage.textContent = "3D preview unavailable in the online version.";
+  if (viewerMessage) viewerMessage.textContent = "3D preview not available yet.";
 }
 
     if (data.files && fileLinks) {
@@ -490,7 +496,7 @@ function openSavedProject(index) {
     files: {
       house_data_json: null,
       layout_data_json: null,
-      glb_file: null
+      glb_file: p.glb_url || null
     }
   };
 

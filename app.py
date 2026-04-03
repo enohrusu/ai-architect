@@ -194,15 +194,16 @@ def generate_house(request: HouseRequest):
     cursor = conn.cursor()
 
     cursor.execute(
-        "INSERT INTO projects (user_id, project_id, prompt, house_data, layout_data) VALUES (%s, %s, %s, %s, %s)",
-        (
-            user_id,
-            project_id,
-            request.prompt,
-            json.dumps(house_data),
-            json.dumps(layout_data)
-        )
+    "INSERT INTO projects (user_id, project_id, prompt, house_data, layout_data, glb_url) VALUES (%s, %s, %s, %s, %s, %s)",
+    (
+        user_id,
+        project_id,
+        request.prompt,
+        json.dumps(house_data),
+        json.dumps(layout_data),
+        worker_glb_url
     )
+)
 
     if user_id:
         cursor.execute(
@@ -244,9 +245,9 @@ def get_user_projects(user_id: int):
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT project_id, prompt, house_data, layout_data, created_at FROM projects WHERE user_id = %s ORDER BY created_at DESC",
-        (user_id,)
-    )
+    "SELECT project_id, prompt, house_data, layout_data, glb_url, created_at FROM projects WHERE user_id = %s ORDER BY created_at DESC",
+    (user_id,)
+)
 
     rows = cursor.fetchall()
     cursor.close()
@@ -255,11 +256,12 @@ def get_user_projects(user_id: int):
     projects = []
     for row in rows:
         projects.append({
-            "project_id": row[0],
-            "prompt": row[1],
-            "house_data": json.loads(row[2]) if row[2] else None,
-            "layout_data": json.loads(row[3]) if row[3] else None,
-            "created_at": str(row[4])
-        })
+    "project_id": row[0],
+    "prompt": row[1],
+    "house_data": json.loads(row[2]) if row[2] else None,
+    "layout_data": json.loads(row[3]) if row[3] else None,
+    "glb_url": row[4],
+    "created_at": str(row[5])
+})
 
     return {"projects": projects}
