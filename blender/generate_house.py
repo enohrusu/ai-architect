@@ -31,21 +31,29 @@ with open(layout_file, "r", encoding="utf-8") as f:
     layout_data = json.load(f)
 
 rooms = layout_data["rooms"]
+walls = layout_data.get("walls", [])
+
+house = layout_data.get("house", {})
+house_width = house.get("width", 10)
+house_depth = house.get("depth", 10)
+
+center_x = house_width / 2
+center_y = house_depth / 2
 
 # ---------- Parameters ----------
-WALL_THICKNESS = 0.22
 WALL_HEIGHT = 3.0
 FLOOR_THICKNESS = 0.18
 CEILING_THICKNESS = 0.12
+ROOF_THICKNESS = 0.18
+
 DOOR_HEIGHT = 2.2
 DOOR_WIDTH = 1.0
 DOOR_DEPTH = 0.4
+
 WINDOW_HEIGHT = 1.2
 WINDOW_WIDTH = 1.6
 WINDOW_DEPTH = 0.35
 WINDOW_Z = 1.5
-ROOF_THICKNESS = 0.18
-LABEL_HEIGHT = WALL_HEIGHT + 0.15
 
 # ---------- Materials ----------
 def get_or_create_material(name, base_color, roughness=0.5, metallic=0.0, transmission=0.0, alpha=1.0):
@@ -94,19 +102,6 @@ window_material = get_or_create_material("WindowGlass", (0.72, 0.86, 0.95), roug
 roof_material = get_or_create_material("RoofConcrete", (0.55, 0.55, 0.57), roughness=0.85)
 frame_material = get_or_create_material("WindowFrame", (0.2, 0.2, 0.2), roughness=0.45)
 
-# ---------- Bounds ----------
-min_x = min(room["x"] for room in rooms)
-min_y = min(room["y"] for room in rooms)
-max_x = max(room["x"] + room["w"] for room in rooms)
-max_y = max(room["y"] + room["h"] for room in rooms)
-
-house_width = max_x - min_x
-house_depth = max_y - min_y
-center_x = min_x + house_width / 2
-center_y = min_y + house_depth / 2
-
-corridor = next((room for room in rooms if room["name"] == "corridor"), None)
-
 # ---------- Collections ----------
 wall_objects = []
 door_specs = []
@@ -132,16 +127,32 @@ def add_room_label(text, surface, x, y, z=0.02):
     bpy.ops.object.text_add(location=(x, y, z))
     text_obj = bpy.context.active_object
     text_obj.name = f"Label_{text}"
-    text_obj.data.body = f"{text.replace('_', ' ')}\\n{surface:.1f} m²"
+    text_obj.data.body = f"{text.replace('_', ' ')}\n{surface:.1f} m²"
     text_obj.data.size = 0.28
     text_obj.rotation_euler[0] = math.radians(90)
     text_obj.rotation_euler[2] = 0
 
-def create_wall(name, x, y, w, d, h):
+def create_wall_from_segment(wall_data):
+    x1 = wall_data["x1"]
+    y1 = wall_data["y1"]
+    x2 = wall_data["x2"]
+    y2 = wall_data["y2"]
+    thickness = wall_data["thickness"]
+
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
+
+    if wall_data["orientation"] == "horizontal":
+        length = abs(x2 - x1)
+        scale = (length / 2, thickness / 2, WALL_HEIGHT / 2)
+    else:
+        length = abs(y2 - y1)
+        scale = (thickness / 2, length / 2, WALL_HEIGHT / 2)
+
     wall = create_box(
-        name=name,
-        location=(x, y, h / 2),
-        scale=(w / 2, d / 2, h / 2),
+        name=wall_data["id"],
+        location=(cx, cy, WALL_HEIGHT / 2),
+        scale=scale,
         material=wall_material
     )
     wall_objects.append(wall)
@@ -166,7 +177,6 @@ def add_door_spec(name, x, y, rot_z=0):
     })
 
 def create_window_visual(name, x, y, rot_z=0):
-    # Glass
     glass = create_box(
         name=name,
         location=(x, y, WINDOW_Z),
@@ -175,7 +185,6 @@ def create_window_visual(name, x, y, rot_z=0):
     )
     glass.rotation_euler[2] = math.radians(rot_z)
 
-    # Simple frame
     frame = create_box(
         name=f"{name}_frame",
         location=(x, y, WINDOW_Z),
@@ -184,7 +193,6 @@ def create_window_visual(name, x, y, rot_z=0):
     )
     frame.rotation_euler[2] = math.radians(rot_z)
 
-    # Make inner glass visible in front
     return glass
 
 def add_window_spec(name, x, y, rot_z=0):
@@ -225,6 +233,19 @@ def create_window_cutter(spec):
     cutter.hide_render = True
     return cutter
 
+def point_on_segment_center(wall_data, offset=0.0):
+    x1 = wall_data["x1"]
+    y1 = wall_data["y1"]
+    x2 = wall_data["x2"]
+    y2 = wall_data["y2"]
+
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
+
+    if wall_data["orientation"] == "horizontal":
+        return cx, cy + offset
+    return cx + offset, cy
+
 # ---------- Structural slabs ----------
 floor = create_box(
     name="FloorSlab",
@@ -247,87 +268,46 @@ roof = create_box(
     material=roof_material
 )
 
-# ---------- Room walls + labels ----------
+# ---------- Room labels ----------
 for room in rooms:
-    name = room["name"]
-    x = room["x"]
-    y = room["y"]
-    w = room["w"]
-    h = room["h"]
+    room_center_x = room["x"] + room["w"] / 2
+    room_center_y = room["y"] + room["h"] / 2
+    add_room_label(room["name"], room.get("surface_m2", room["w"] * room["h"]), room_center_x, room_center_y)
 
-    left_x = x
-    right_x = x + w
-    bottom_y = y
-    top_y = y + h
+# ---------- Shared walls ----------
+for wall_data in walls:
+    create_wall_from_segment(wall_data)
 
-    room_center_x = x + w / 2
-    room_center_y = y + h / 2
+# ---------- Doors ----------
+# front door on south facade if possible
+south_walls = [w for w in walls if w["type"] == "exterior" and w.get("facade") == "south" and w["length"] >= DOOR_WIDTH + 0.5]
+if south_walls:
+    front_wall = max(south_walls, key=lambda w: w["length"])
+    dx, dy = point_on_segment_center(front_wall, offset=0.0)
+    add_door_spec("front_door", dx, dy, 90)
+    create_door_visual("Door_front", dx, dy, 90)
 
-    create_wall(f"Wall_{name}_left", left_x, room_center_y, WALL_THICKNESS, h, WALL_HEIGHT)
-    create_wall(f"Wall_{name}_right", right_x, room_center_y, WALL_THICKNESS, h, WALL_HEIGHT)
-    create_wall(f"Wall_{name}_bottom", room_center_x, bottom_y, w, WALL_THICKNESS, WALL_HEIGHT)
-    create_wall(f"Wall_{name}_top", room_center_x, top_y, w, WALL_THICKNESS, WALL_HEIGHT)
+# interior doors: one per interior wall if long enough
+for wall_data in walls:
+    if wall_data["type"] == "interior" and wall_data["length"] >= DOOR_WIDTH + 0.4:
+        dx, dy = point_on_segment_center(wall_data, offset=0.0)
+        rot = 90 if wall_data["orientation"] == "horizontal" else 0
+        add_door_spec(f"{wall_data['id']}_door", dx, dy, rot)
+        create_door_visual(f"Door_{wall_data['id']}", dx, dy, rot)
 
-    add_room_label(name, room.get("surface_m2", w * h), room_center_x, room_center_y)
-
-# ---------- Front door ----------
-add_door_spec("front_door", center_x, min_y, 90)
-create_door_visual("Door_front", center_x, min_y, 90)
-
-# ---------- Interior doors ----------
-for room in rooms:
-    name = room["name"]
-
-    if name == "corridor":
+# ---------- Windows only on exterior walls ----------
+for wall_data in walls:
+    if wall_data["type"] != "exterior":
+        continue
+    if not wall_data.get("window_allowed", False):
+        continue
+    if wall_data["length"] < WINDOW_WIDTH + 0.5:
         continue
 
-    x = room["x"]
-    y = room["y"]
-    w = room["w"]
-    h = room["h"]
-
-    room_center_x = x + w / 2
-    room_center_y = y + h / 2
-
-    if name == "living_room":
-        add_door_spec(f"{name}_door", room_center_x, y + h, 90)
-        create_door_visual(f"Door_{name}", room_center_x, y + h, 90)
-
-    elif name == "kitchen":
-        add_door_spec(f"{name}_door", x, room_center_y, 0)
-        create_door_visual(f"Door_{name}", x, room_center_y, 0)
-
-    elif name == "garage":
-        add_door_spec(f"{name}_door", x, room_center_y, 0)
-        create_door_visual(f"Door_{name}", x, room_center_y, 0)
-
-    elif corridor:
-        corridor_center_x = corridor["x"] + corridor["w"] / 2
-
-        if room_center_x < corridor_center_x:
-            add_door_spec(f"{name}_door", x + w, room_center_y, 0)
-            create_door_visual(f"Door_{name}", x + w, room_center_y, 0)
-        else:
-            add_door_spec(f"{name}_door", x, room_center_y, 0)
-            create_door_visual(f"Door_{name}", x, room_center_y, 0)
-
-    else:
-        add_door_spec(f"{name}_door", room_center_x, y, 90)
-        create_door_visual(f"Door_{name}", room_center_x, y, 90)
-
-# ---------- Outer windows ----------
-outer_windows = [
-    ("window_front_left", min_x + 2, min_y + 0.02, 90),
-    ("window_front_right", max_x - 2, min_y + 0.02, 90),
-    ("window_back_left", min_x + 2, max_y - 0.02, 90),
-    ("window_back_right", max_x - 2, max_y - 0.02, 90),
-    ("window_left_side", min_x + 0.02, center_y, 0),
-    ("window_right_side", max_x - 0.02, center_y, 0),
-]
-
-for name, x, y, rot_z in outer_windows:
-    add_window_spec(name, x, y, rot_z)
-    create_window_visual(f"Window_{name}", x, y, rot_z)
+    wx, wy = point_on_segment_center(wall_data, offset=0.0)
+    rot = 90 if wall_data["orientation"] == "horizontal" else 0
+    add_window_spec(f"{wall_data['id']}_window", wx, wy, rot)
+    create_window_visual(f"Window_{wall_data['id']}", wx, wy, rot)
 
 # ---------- Apply boolean cutters ----------
 for spec in door_specs:
@@ -354,7 +334,7 @@ for wall in wall_objects:
             pass
 
 # ---------- Cleanup cutters ----------
-for obj in bpy.data.objects:
+for obj in list(bpy.data.objects):
     if obj.name.endswith("_cutter"):
         bpy.data.objects.remove(obj, do_unlink=True)
 
@@ -371,15 +351,14 @@ sun = bpy.context.active_object
 sun.name = "SunLight"
 sun.data.energy = 4.0
 
-# Remove text labels before export
+# ---------- Keep floor labels in .blend, remove from GLB ----------
 for obj in list(bpy.data.objects):
     if obj.type == 'FONT':
-        bpy.data.objects.remove(obj, do_unlink=True)
+        obj.hide_render = True
 
 mesh_objs = [obj for obj in bpy.data.objects if obj.type == 'MESH']
 
 bpy.ops.object.select_all(action='DESELECT')
-
 for obj in mesh_objs:
     obj.select_set(True)
 
@@ -388,6 +367,7 @@ if mesh_objs:
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
 
 print("Number of objects in scene:", len(bpy.data.objects))
+print("Number of walls:", len(walls))
 
 # ---------- Save Blender file ----------
 output_blend = os.path.join(project_folder, "generated_house.blend")
@@ -409,4 +389,4 @@ bpy.ops.export_scene.gltf(
 
 print(f"Blender file saved to: {output_blend}")
 print(f"GLB exported to: {glb_path}")
-print("Blender house generation complete.")
+print("Shared-wall Blender house generation complete.")

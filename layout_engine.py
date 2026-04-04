@@ -24,15 +24,15 @@ def clamp(value, min_v, max_v):
 def room_rules():
     return {
         "living_room": {"min": 20, "ideal_min": 25, "ideal_max": 35, "max": 999},
-        "kitchen": {"min": 8, "ideal_min": 12, "ideal_max": 20, "max": 30},
+        "kitchen": {"min": 8, "ideal_min": 12, "ideal_max": 18, "max": 25},
         "master_bedroom": {"min": 12, "ideal_min": 14, "ideal_max": 18, "max": 25},
         "secondary_bedroom": {"min": 9, "ideal_min": 10, "ideal_max": 12, "max": 16},
         "bathroom": {"min": 4, "ideal_min": 5, "ideal_max": 8, "max": 12},
         "wc": {"min": 1.2, "ideal_min": 1.5, "ideal_max": 2.0, "max": 3},
-        "laundry": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 10},
-        "storage": {"min": 2, "ideal_min": 4, "ideal_max": 6, "max": 10},
+        "laundry": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 8},
+        "storage": {"min": 2, "ideal_min": 3, "ideal_max": 5, "max": 8},
         "garage": {"min": 15, "ideal_min": 18, "ideal_max": 20, "max": 25},
-        "corridor": {"min": 4, "ideal_min": 5, "ideal_max": 8, "max": 18},
+        "corridor": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 10},
     }
 
 
@@ -59,8 +59,8 @@ def room_name(room_type, index, all_rooms):
 
 
 def estimate_house_rectangle(total_area):
-    width = math.sqrt(total_area * 1.2)
-    depth = total_area / width
+    width = math.sqrt(total_area * 1.18)
+    depth = total_area / max(width, 1)
 
     width = snap(width)
     depth = snap(depth)
@@ -103,9 +103,9 @@ def build_room_program(house_data):
         rt = room["type"]
 
         if rt == "living_room":
-            area = choose_area(rt, total_area * 0.22)
+            area = choose_area(rt, total_area * 0.24)
         elif rt == "kitchen":
-            area = choose_area(rt, total_area * 0.12)
+            area = choose_area(rt, total_area * 0.11)
         elif rt == "master_bedroom":
             area = choose_area(rt, 16)
         elif rt == "secondary_bedroom":
@@ -117,11 +117,11 @@ def build_room_program(house_data):
         elif rt == "laundry":
             area = choose_area(rt, 4.5)
         elif rt == "storage":
-            area = choose_area(rt, 4)
+            area = choose_area(rt, 3.5)
         elif rt == "garage":
             area = choose_area(rt, 18)
         elif rt == "corridor":
-            area = choose_area(rt, total_area * 0.06)
+            area = choose_area(rt, total_area * 0.04)
         else:
             area = choose_area(rt, 6)
 
@@ -143,25 +143,57 @@ def build_room_program(house_data):
     return targets
 
 
-def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
-    prompt = f"""
-You are an architectural planner.
+def classify_room_groups(room_program):
+    day_zone = []
+    night_zone = []
+    service_zone = []
 
-Generate a UNIQUE rectangular house plan every time.
+    for room in room_program:
+        rt = room["type"]
+        if rt in ["living_room", "kitchen"]:
+            day_zone.append(room)
+        elif rt in ["master_bedroom", "secondary_bedroom"]:
+            night_zone.append(room)
+        else:
+            service_zone.append(room)
+
+    return {
+        "day_zone": day_zone,
+        "night_zone": night_zone,
+        "service_zone": service_zone,
+    }
+
+
+def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
+    grouped = classify_room_groups(room_program)
+
+    prompt = f"""
+You are an architectural layout planner.
+
+Generate a UNIQUE realistic house plan every time.
 
 Hard rules:
-- The outer perimeter of the house must be one rectangle only.
+- The house perimeter must be one rectangle only.
 - All rooms must fit completely inside the perimeter.
-- Align rooms to a 0.5 meter grid.
+- Snap all room coordinates and dimensions to a 0.5 m grid.
 - Use mostly rectangular rooms.
-- Compact layout, realistic circulation.
-- Kitchen near living room.
-- Living room on an exterior edge.
-- Bathrooms/WC/laundry/storage can be more internal.
-- Garage, if present, should touch an exterior edge.
-- Corridor should be practical and compact.
-- Do NOT overlap rooms.
-- Return a different valid arrangement every time.
+- Keep the plan compact and realistic.
+- Avoid long oversized corridors.
+- Interior partition logic should be simple and buildable.
+- Windows will only be placed on exterior walls.
+- Return only rooms; wall generation happens later.
+
+Zoning rules:
+- DAY ZONE: living_room and kitchen should be adjacent or directly connected.
+- Living room should be on an exterior facade.
+- Kitchen should also touch an exterior wall if possible.
+- NIGHT ZONE: bedrooms should be grouped together in a quieter area.
+- SERVICE ZONE: bathroom, wc, laundry, storage should be close to each other.
+- Garage, if present, should touch an exterior edge and ideally be near service spaces.
+- Corridor should be minimal and practical, not oversized.
+- Avoid isolated rooms.
+- Try to create a clear entrance sequence from front door toward day zone.
+- Prefer plans that feel like a real house, not random rectangles.
 
 House rectangle:
 width = {house_width}
@@ -169,6 +201,9 @@ depth = {house_depth}
 
 Room program:
 {json.dumps(room_program, indent=2)}
+
+Grouped zones:
+{json.dumps(grouped, indent=2)}
 
 Return ONLY JSON in this exact format:
 {{
@@ -259,6 +294,9 @@ def validate_layout(layout, room_program, house_width, house_depth):
         if not all(k in room for k in ["name", "type", "x", "y", "w", "h"]):
             return False, f"Invalid room: {room}"
 
+        if room["w"] <= 0 or room["h"] <= 0:
+            return False, f"Invalid room size: {room['name']}"
+
         if not inside_perimeter(room, house_width, house_depth):
             return False, f"Room outside perimeter: {room['name']}"
 
@@ -271,34 +309,100 @@ def validate_layout(layout, room_program, house_width, house_depth):
 
 
 def fallback_grid_layout(room_program, house_width, house_depth):
+    day = [r for r in room_program if r["type"] in ["living_room", "kitchen"]]
+    night = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
+    service = [r for r in room_program if r["type"] not in ["living_room", "kitchen", "master_bedroom", "secondary_bedroom"]]
+
     rooms = []
+
+    day_band_depth = snap(house_depth * 0.42)
+    night_band_depth = snap(house_depth * 0.38)
+    service_band_depth = snap(house_depth - day_band_depth - night_band_depth)
+
+    # Day zone on south/front
     x = 0.0
-    y = 0.0
+    for room in day:
+        if room["type"] == "living_room":
+            w = snap(max(house_width * 0.55, math.sqrt(room["target_area"] * 1.3)))
+        else:
+            w = snap(max(house_width * 0.25, math.sqrt(room["target_area"] * 1.1)))
+
+        h = snap(room["target_area"] / max(w, GRID))
+        h = min(day_band_depth, max(GRID, h))
+
+        if x + w > house_width:
+            w = snap(house_width - x)
+
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": x,
+            "y": 0.0,
+            "w": w,
+            "h": h
+        })
+        x += w
+
+    # Night zone in middle
+    x = 0.0
+    row_y = day_band_depth
     row_height = 0.0
 
-    for room in room_program:
-        target_area = room["target_area"]
-        w = snap(math.sqrt(target_area * 1.2))
-        h = snap(target_area / max(w, GRID))
+    for room in night:
+        w = snap(math.sqrt(room["target_area"] * 1.15))
+        h = snap(room["target_area"] / max(w, GRID))
 
         if x + w > house_width:
             x = 0.0
-            y += row_height
+            row_y += row_height
             row_height = 0.0
 
-        if y + h > house_depth:
-            h = max(GRID, snap(house_depth - y))
+        if row_y + h > day_band_depth + night_band_depth:
+            h = snap((day_band_depth + night_band_depth) - row_y)
 
-        rooms.append(
-            {
-                "name": room["name"],
-                "type": room["type"],
-                "x": x,
-                "y": y,
-                "w": w,
-                "h": h,
-            }
-        )
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": x,
+            "y": row_y,
+            "w": w,
+            "h": h
+        })
+
+        x += w
+        row_height = max(row_height, h)
+
+    # Service zone at back
+    x = 0.0
+    row_y = day_band_depth + night_band_depth
+    row_height = 0.0
+
+    for room in service:
+        if room["type"] == "garage":
+            w = snap(max(5.5, math.sqrt(room["target_area"] * 1.2)))
+        elif room["type"] == "corridor":
+            w = snap(max(1.5, math.sqrt(room["target_area"] * 0.8)))
+        else:
+            w = snap(math.sqrt(room["target_area"] * 1.0))
+
+        h = snap(room["target_area"] / max(w, GRID))
+
+        if x + w > house_width:
+            x = 0.0
+            row_y += row_height
+            row_height = 0.0
+
+        if row_y + h > house_depth:
+            h = snap(house_depth - row_y)
+
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": x,
+            "y": row_y,
+            "w": w,
+            "h": h
+        })
 
         x += w
         row_height = max(row_height, h)
@@ -416,7 +520,6 @@ def build_shared_walls(layout):
                 }
             )
         else:
-            # orphan edge inside the perimeter: keep it as interior partition
             walls.append(
                 {
                     "id": f"wall_{len(walls)+1}",
