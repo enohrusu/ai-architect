@@ -1,14 +1,14 @@
 import json
 import math
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv(dotenv_path=".env")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-GRID = 0.5  # 50 cm grid
+GRID = 0.5
 INTERIOR_WALL_THICKNESS = 0.10
 EXTERIOR_WALL_THICKNESS = 0.20
 
@@ -21,23 +21,23 @@ def clamp(value, min_v, max_v):
     return max(min_v, min(value, max_v))
 
 
-def get_room_rules():
+def room_rules():
     return {
         "living_room": {"min": 20, "ideal_min": 25, "ideal_max": 35, "max": 999},
         "kitchen": {"min": 8, "ideal_min": 12, "ideal_max": 20, "max": 30},
         "master_bedroom": {"min": 12, "ideal_min": 14, "ideal_max": 18, "max": 25},
         "secondary_bedroom": {"min": 9, "ideal_min": 10, "ideal_max": 12, "max": 16},
         "bathroom": {"min": 4, "ideal_min": 5, "ideal_max": 8, "max": 12},
-        "wc": {"min": 1.2, "ideal_min": 1.5, "ideal_max": 2, "max": 3},
+        "wc": {"min": 1.2, "ideal_min": 1.5, "ideal_max": 2.0, "max": 3},
         "laundry": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 10},
         "storage": {"min": 2, "ideal_min": 4, "ideal_max": 6, "max": 10},
         "garage": {"min": 15, "ideal_min": 18, "ideal_max": 20, "max": 25},
-        "corridor": {"min": 3, "ideal_min": 4, "ideal_max": 8, "max": 20},
+        "corridor": {"min": 4, "ideal_min": 5, "ideal_max": 8, "max": 18},
     }
 
 
 def choose_area(room_type, fallback_area):
-    rules = get_room_rules().get(room_type)
+    rules = room_rules().get(room_type)
     if not rules:
         return snap(max(4, fallback_area))
 
@@ -48,15 +48,23 @@ def choose_area(room_type, fallback_area):
     return snap(area)
 
 
+def room_name(room_type, index, all_rooms):
+    same_type_count = sum(1 for r in all_rooms if r["type"] == room_type)
+
+    if room_type == "master_bedroom":
+        return "master_bedroom"
+    if same_type_count == 1:
+        return room_type
+    return f"{room_type}_{index}"
+
+
 def estimate_house_rectangle(total_area):
-    # compact rectangle, snapped to grid
     width = math.sqrt(total_area * 1.2)
     depth = total_area / width
 
     width = snap(width)
     depth = snap(depth)
 
-    # keep reasonable proportions
     if width < depth:
         width, depth = depth, width
 
@@ -69,42 +77,27 @@ def build_room_program(house_data):
     garage = bool(house_data.get("garage", False))
     total_area = float(house_data.get("area_m2", 120))
 
-    rooms = []
-
-    rooms.append({"type": "living_room", "count": 1})
-    rooms.append({"type": "kitchen", "count": 1})
-    rooms.append({"type": "master_bedroom", "count": 1})
-
-    secondary_count = max(0, bedrooms - 1)
-    if secondary_count > 0:
-        rooms.append({"type": "secondary_bedroom", "count": secondary_count})
-
-    main_bath_count = min(1, bathrooms)
-    extra_bath_count = max(0, bathrooms - 1)
-
-    if main_bath_count > 0:
-        rooms.append({"type": "bathroom", "count": 1})
-
-    if extra_bath_count > 0:
-        rooms.append({"type": "wc", "count": 1})
-        if extra_bath_count > 1:
-            rooms.append({"type": "bathroom", "count": extra_bath_count - 1})
-
-    rooms.append({"type": "laundry", "count": 1})
-    rooms.append({"type": "storage", "count": 1})
-    rooms.append({"type": "corridor", "count": 1})
-
-    if garage:
-        rooms.append({"type": "garage", "count": 1})
+    rooms = [
+        {"type": "living_room", "count": 1},
+        {"type": "kitchen", "count": 1},
+        {"type": "master_bedroom", "count": 1},
+        {"type": "secondary_bedroom", "count": max(0, bedrooms - 1)},
+        {"type": "bathroom", "count": min(1, bathrooms)},
+        {"type": "wc", "count": 1 if bathrooms > 1 else 0},
+        {"type": "bathroom", "count": max(0, bathrooms - 2)},
+        {"type": "laundry", "count": 1},
+        {"type": "storage", "count": 1},
+        {"type": "corridor", "count": 1},
+        {"type": "garage", "count": 1 if garage else 0},
+    ]
 
     expanded = []
     for item in rooms:
         for i in range(item["count"]):
             expanded.append({"type": item["type"], "index": i + 1})
 
-    # rough target areas
-    remaining = total_area
     targets = []
+    remaining = total_area
 
     for room in expanded:
         rt = room["type"]
@@ -141,7 +134,6 @@ def build_room_program(house_data):
             }
         )
 
-    # living room absorbs remaining common area
     if remaining > 0:
         for r in targets:
             if r["type"] == "living_room":
@@ -151,52 +143,38 @@ def build_room_program(house_data):
     return targets
 
 
-def room_name(room_type, index, all_rooms):
-    same_type_count = sum(1 for r in all_rooms if r["type"] == room_type)
-
-    if room_type == "master_bedroom":
-        return "master_bedroom"
-    if same_type_count == 1:
-        return room_type
-    return f"{room_type}_{index}"
-
-
 def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
     prompt = f"""
-You are an architectural layout planner.
+You are an architectural planner.
 
-Create a UNIQUE rectangular house plan every time.
+Generate a UNIQUE rectangular house plan every time.
 
-Rules:
-- The house perimeter must be a single rectangle.
-- All rooms must fit inside the perimeter.
-- Place rooms on a grid.
-- Prefer compact rectangular rooms.
-- Adjacent rooms share only one interior wall of 0.10 m thickness.
-- Exterior walls are 0.20 m thickness.
-- Windows must only be possible on exterior walls.
-- Living room should be placed on an exterior edge.
-- Kitchen should be near the living room.
+Hard rules:
+- The outer perimeter of the house must be one rectangle only.
+- All rooms must fit completely inside the perimeter.
+- Align rooms to a 0.5 meter grid.
+- Use mostly rectangular rooms.
+- Compact layout, realistic circulation.
+- Kitchen near living room.
+- Living room on an exterior edge.
 - Bathrooms/WC/laundry/storage can be more internal.
-- Garage should be on an exterior side if present.
-- Corridor width should be around 1.0 to 1.2 m.
-- Keep the plan practical and realistic.
-- Return DIFFERENT valid room arrangements each time.
-- Coordinates are inside the house rectangle only.
-- Use meters.
+- Garage, if present, should touch an exterior edge.
+- Corridor should be practical and compact.
+- Do NOT overlap rooms.
+- Return a different valid arrangement every time.
 
 House rectangle:
 width = {house_width}
 depth = {house_depth}
 
-Requested room program:
+Room program:
 {json.dumps(room_program, indent=2)}
 
-Return ONLY valid JSON in this exact format:
+Return ONLY JSON in this exact format:
 {{
   "house": {{
-    "width": number,
-    "depth": number
+    "width": {house_width},
+    "depth": {house_depth}
   }},
   "rooms": [
     {{
@@ -210,9 +188,8 @@ Return ONLY valid JSON in this exact format:
   ]
 }}
 """
-
     response = client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-5.4",
         input=prompt,
     )
 
@@ -221,17 +198,12 @@ Return ONLY valid JSON in this exact format:
     return json.loads(text)
 
 
-def validate_room(room):
-    return all(k in room for k in ["name", "type", "x", "y", "w", "h"])
-
-
-def rectangles_overlap(a, b):
-    return not (
-        a["x"] + a["w"] <= b["x"]
-        or b["x"] + b["w"] <= a["x"]
-        or a["y"] + a["h"] <= b["y"]
-        or b["y"] + b["h"] <= a["y"]
-    )
+def snap_room(room):
+    room["x"] = snap(room["x"])
+    room["y"] = snap(room["y"])
+    room["w"] = snap(room["w"])
+    room["h"] = snap(room["h"])
+    return room
 
 
 def inside_perimeter(room, width, depth):
@@ -243,16 +215,17 @@ def inside_perimeter(room, width, depth):
     )
 
 
-def snap_room(room):
-    room["x"] = snap(room["x"])
-    room["y"] = snap(room["y"])
-    room["w"] = snap(room["w"])
-    room["h"] = snap(room["h"])
-    return room
+def rectangles_overlap(a, b):
+    return not (
+        a["x"] + a["w"] <= b["x"]
+        or b["x"] + b["w"] <= a["x"]
+        or a["y"] + a["h"] <= b["y"]
+        or b["y"] + b["h"] <= a["y"]
+    )
 
 
 def ensure_minimums(rooms):
-    rules = get_room_rules()
+    rules = room_rules()
 
     for room in rooms:
         room = snap_room(room)
@@ -283,8 +256,8 @@ def validate_layout(layout, room_program, house_width, house_depth):
         return False, "Room names mismatch"
 
     for room in rooms:
-        if not validate_room(room):
-            return False, f"Invalid room object: {room}"
+        if not all(k in room for k in ["name", "type", "x", "y", "w", "h"]):
+            return False, f"Invalid room: {room}"
 
         if not inside_perimeter(room, house_width, house_depth):
             return False, f"Room outside perimeter: {room['name']}"
@@ -292,30 +265,9 @@ def validate_layout(layout, room_program, house_width, house_depth):
     for i in range(len(rooms)):
         for j in range(i + 1, len(rooms)):
             if rectangles_overlap(rooms[i], rooms[j]):
-                return False, f"Rooms overlap: {rooms[i]['name']} and {rooms[j]['name']}"
+                return False, f"Overlap: {rooms[i]['name']} and {rooms[j]['name']}"
 
     return True, "OK"
-
-
-def add_surface_labels(layout):
-    for room in layout["rooms"]:
-        room["surface_m2"] = round(room["w"] * room["h"], 2)
-    return layout
-
-
-def add_wall_metadata(layout):
-    layout["wall_rules"] = {
-        "interior_wall_thickness_m": INTERIOR_WALL_THICKNESS,
-        "exterior_wall_thickness_m": EXTERIOR_WALL_THICKNESS,
-    }
-    return layout
-
-
-def add_window_rules(layout):
-    layout["window_rules"] = {
-        "windows_only_on_exterior_walls": True
-    }
-    return layout
 
 
 def fallback_grid_layout(room_program, house_width, house_depth):
@@ -351,10 +303,151 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         x += w
         row_height = max(row_height, h)
 
-    return {
-        "house": {"width": house_width, "depth": house_depth},
-        "rooms": rooms,
+    return {"house": {"width": house_width, "depth": house_depth}, "rooms": rooms}
+
+
+def add_surface_labels(layout):
+    for room in layout["rooms"]:
+        room["surface_m2"] = round(room["w"] * room["h"], 2)
+    return layout
+
+
+def normalize_segment(x1, y1, x2, y2):
+    x1, y1, x2, y2 = snap(x1), snap(y1), snap(x2), snap(y2)
+
+    if (x1, y1) <= (x2, y2):
+        return (x1, y1, x2, y2)
+    return (x2, y2, x1, y1)
+
+
+def room_edges(room):
+    x = room["x"]
+    y = room["y"]
+    w = room["w"]
+    h = room["h"]
+
+    return [
+        ("bottom", normalize_segment(x, y, x + w, y)),
+        ("top", normalize_segment(x, y + h, x + w, y + h)),
+        ("left", normalize_segment(x, y, x, y + h)),
+        ("right", normalize_segment(x + w, y, x + w, y + h)),
+    ]
+
+
+def segment_orientation(seg):
+    x1, y1, x2, y2 = seg
+    return "horizontal" if y1 == y2 else "vertical"
+
+
+def segment_length(seg):
+    x1, y1, x2, y2 = seg
+    return round(math.hypot(x2 - x1, y2 - y1), 3)
+
+
+def on_outer_perimeter(seg, house_width, house_depth):
+    x1, y1, x2, y2 = seg
+
+    if y1 == 0 and y2 == 0:
+        return True, "south"
+    if y1 == house_depth and y2 == house_depth:
+        return True, "north"
+    if x1 == 0 and x2 == 0:
+        return True, "west"
+    if x1 == house_width and x2 == house_width:
+        return True, "east"
+
+    return False, None
+
+
+def build_shared_walls(layout):
+    house_width = layout["house"]["width"]
+    house_depth = layout["house"]["depth"]
+
+    edge_map = {}
+
+    for room in layout["rooms"]:
+        for side, seg in room_edges(room):
+            edge_map.setdefault(seg, []).append(
+                {
+                    "room_name": room["name"],
+                    "room_type": room["type"],
+                    "side": side,
+                }
+            )
+
+    walls = []
+
+    for seg, owners in edge_map.items():
+        x1, y1, x2, y2 = seg
+        is_exterior, facade = on_outer_perimeter(seg, house_width, house_depth)
+
+        if is_exterior:
+            walls.append(
+                {
+                    "id": f"wall_{len(walls)+1}",
+                    "type": "exterior",
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "orientation": segment_orientation(seg),
+                    "length": segment_length(seg),
+                    "thickness": EXTERIOR_WALL_THICKNESS,
+                    "rooms": [o["room_name"] for o in owners],
+                    "facade": facade,
+                    "window_allowed": True,
+                }
+            )
+        elif len(owners) >= 2:
+            walls.append(
+                {
+                    "id": f"wall_{len(walls)+1}",
+                    "type": "interior",
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "orientation": segment_orientation(seg),
+                    "length": segment_length(seg),
+                    "thickness": INTERIOR_WALL_THICKNESS,
+                    "rooms": [o["room_name"] for o in owners[:2]],
+                    "facade": None,
+                    "window_allowed": False,
+                }
+            )
+        else:
+            # orphan edge inside the perimeter: keep it as interior partition
+            walls.append(
+                {
+                    "id": f"wall_{len(walls)+1}",
+                    "type": "interior",
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "orientation": segment_orientation(seg),
+                    "length": segment_length(seg),
+                    "thickness": INTERIOR_WALL_THICKNESS,
+                    "rooms": [o["room_name"] for o in owners],
+                    "facade": None,
+                    "window_allowed": False,
+                }
+            )
+
+    return layout | {"walls": walls}
+
+
+def add_metadata(layout):
+    layout["wall_rules"] = {
+        "interior_wall_thickness_m": INTERIOR_WALL_THICKNESS,
+        "exterior_wall_thickness_m": EXTERIOR_WALL_THICKNESS,
+        "shared_interior_walls_only_once": True,
+        "house_perimeter_rectangle": True,
     }
+    layout["window_rules"] = {
+        "windows_only_on_exterior_walls": True
+    }
+    return layout
 
 
 def generate_layout(house_data):
@@ -362,33 +455,28 @@ def generate_layout(house_data):
     house_width, house_depth = estimate_house_rectangle(total_area)
     room_program = build_room_program(house_data)
 
-    last_error = None
     layout = None
 
-    # try several times to get unique valid plans from OpenAI
     for _ in range(3):
         try:
             candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
-
             candidate["house"]["width"] = house_width
             candidate["house"]["depth"] = house_depth
-
             candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
             candidate["rooms"] = ensure_minimums(candidate["rooms"])
 
-            valid, message = validate_layout(candidate, room_program, house_width, house_depth)
+            valid, _ = validate_layout(candidate, room_program, house_width, house_depth)
             if valid:
                 layout = candidate
                 break
-            last_error = message
-        except Exception as e:
-            last_error = str(e)
+        except Exception:
+            pass
 
     if layout is None:
         layout = fallback_grid_layout(room_program, house_width, house_depth)
 
     layout = add_surface_labels(layout)
-    layout = add_wall_metadata(layout)
-    layout = add_window_rules(layout)
+    layout = build_shared_walls(layout)
+    layout = add_metadata(layout)
 
     return layout
