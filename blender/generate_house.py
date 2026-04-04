@@ -341,7 +341,7 @@ if south_walls:
     dx, dy = point_on_segment_center(front_wall, offset=0.0)
     add_door_spec("front_door", dx, dy, 90)
     create_door_visual("Door_front", dx, dy, 90)
-create_entrance_canopy(center_x, min_y)
+    create_entrance_canopy(dx, dy)
 
 # ---------- Garage exterior door ----------
 garage_exterior_walls = [
