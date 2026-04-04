@@ -114,6 +114,15 @@ def add_material(obj, material):
     else:
         obj.data.materials.append(material)
 
+def create_entrance_canopy(x, y):
+    canopy = create_box(
+        name="EntranceCanopy",
+        location=(x, y + 0.6, 2.55),
+        scale=(1.2, 0.6, 0.08),
+        material=roof_material
+    )
+    return canopy
+
 def create_box(name, location, scale, material=None):
     bpy.ops.mesh.primitive_cube_add(location=location)
     obj = bpy.context.active_object
@@ -158,6 +167,28 @@ def create_wall_from_segment(wall_data):
     wall_objects.append(wall)
     return wall
 
+def create_garage_door_visual(name, x, y, rot_z=0):
+    garage_door = create_box(
+        name=name,
+        location=(x, y, 1.1),
+        scale=(0.08, 1.4, 1.1),
+        material=door_material
+    )
+    garage_door.rotation_euler[2] = math.radians(rot_z)
+    return garage_door
+
+
+def add_garage_door_spec(name, x, y, rot_z=0):
+    door_specs.append({
+        "name": name,
+        "x": x,
+        "y": y,
+        "rot_z": rot_z,
+        "width": 2.6,
+        "height": 2.2,
+        "depth": 0.5
+    })
+
 def create_door_visual(name, x, y, rot_z=0):
     door = create_box(
         name=name,
@@ -176,19 +207,40 @@ def add_door_spec(name, x, y, rot_z=0):
         "rot_z": rot_z
     })
 
-def create_window_visual(name, x, y, rot_z=0):
+def create_window_visual(name, x, y, rot_z=0, room_type=None):
+    width = WINDOW_WIDTH
+    height = WINDOW_HEIGHT
+    z_pos = WINDOW_Z
+
+    if room_type in ["bathroom", "wc"]:
+        width = 0.8
+        height = 0.6
+        z_pos = 1.8
+    elif room_type in ["master_bedroom", "secondary_bedroom"]:
+        width = 1.4
+        height = 1.2
+        z_pos = 1.5
+    elif room_type == "kitchen":
+        width = 1.2
+        height = 1.0
+        z_pos = 1.5
+    elif room_type == "living_room":
+        width = 1.8
+        height = 1.3
+        z_pos = 1.4
+
     glass = create_box(
         name=name,
-        location=(x, y, WINDOW_Z),
-        scale=(0.03, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2),
+        location=(x, y, z_pos),
+        scale=(0.03, width / 2, height / 2),
         material=window_material
     )
     glass.rotation_euler[2] = math.radians(rot_z)
 
     frame = create_box(
         name=f"{name}_frame",
-        location=(x, y, WINDOW_Z),
-        scale=(0.04, WINDOW_WIDTH / 2 + 0.03, WINDOW_HEIGHT / 2 + 0.03),
+        location=(x, y, z_pos),
+        scale=(0.04, width / 2 + 0.03, height / 2 + 0.03),
         material=frame_material
     )
     frame.rotation_euler[2] = math.radians(rot_z)
@@ -207,11 +259,14 @@ def create_door_cutter(spec):
     x = spec["x"]
     y = spec["y"]
     rot_z = spec["rot_z"]
+    width = spec.get("width", DOOR_WIDTH)
+    height = spec.get("height", DOOR_HEIGHT)
+    depth = spec.get("depth", DOOR_DEPTH)
 
     cutter = create_box(
         name=f"{spec['name']}_cutter",
-        location=(x, y, DOOR_HEIGHT / 2),
-        scale=(DOOR_DEPTH / 2, DOOR_WIDTH / 2, DOOR_HEIGHT / 2)
+        location=(x, y, height / 2),
+        scale=(depth / 2, width / 2, height / 2)
     )
     cutter.rotation_euler[2] = math.radians(rot_z)
     cutter.display_type = 'WIRE'
@@ -286,28 +341,141 @@ if south_walls:
     dx, dy = point_on_segment_center(front_wall, offset=0.0)
     add_door_spec("front_door", dx, dy, 90)
     create_door_visual("Door_front", dx, dy, 90)
+create_entrance_canopy(center_x, min_y)
+
+# ---------- Garage exterior door ----------
+garage_exterior_walls = [
+    w for w in walls
+    if w["type"] == "exterior"
+    and w["length"] >= 2.8
+    and any(r.startswith("garage") for r in w.get("rooms", []))
+]
+
+if garage_exterior_walls:
+    garage_wall = max(garage_exterior_walls, key=lambda w: w["length"])
+    gx, gy = point_on_segment_center(garage_wall, offset=0.0)
+    grot = 90 if garage_wall["orientation"] == "horizontal" else 0
+
+    add_garage_door_spec("garage_main_door", gx, gy, grot)
+    create_garage_door_visual("GarageDoor_main", gx, gy, grot)
 
 # interior doors: one per interior wall if long enough
+ROOM_TYPES_NEED_PRIVATE_DOOR = {
+    "master_bedroom",
+    "secondary_bedroom",
+    "bathroom",
+    "wc",
+    "laundry",
+    "storage",
+    "garage",
+}
+
+door_added_for_room = set()
+
 for wall_data in walls:
-    if wall_data["type"] == "interior" and wall_data["length"] >= DOOR_WIDTH + 0.4:
+    if wall_data["type"] != "interior":
+        continue
+
+    if wall_data["length"] < DOOR_WIDTH + 0.4:
+        continue
+
+    connected_rooms = wall_data.get("rooms", [])
+    if len(connected_rooms) < 2:
+        continue
+
+    room_a = connected_rooms[0]
+    room_b = connected_rooms[1]
+
+    room_a_data = next((r for r in rooms if r["name"] == room_a), None)
+    room_b_data = next((r for r in rooms if r["name"] == room_b), None)
+
+    if not room_a_data or not room_b_data:
+        continue
+
+    type_a = room_a_data["type"]
+    type_b = room_b_data["type"]
+
+    should_add_door = False
+
+    # Private/service rooms get one door only
+    if type_a in ROOM_TYPES_NEED_PRIVATE_DOOR and room_a not in door_added_for_room:
+        should_add_door = True
+        door_added_for_room.add(room_a)
+
+    elif type_b in ROOM_TYPES_NEED_PRIVATE_DOOR and room_b not in door_added_for_room:
+        should_add_door = True
+        door_added_for_room.add(room_b)
+
+    # Kitchen gets one connection if not already connected
+    elif type_a == "kitchen" and room_a not in door_added_for_room:
+        should_add_door = True
+        door_added_for_room.add(room_a)
+
+    elif type_b == "kitchen" and room_b not in door_added_for_room:
+        should_add_door = True
+        door_added_for_room.add(room_b)
+
+    if should_add_door:
         dx, dy = point_on_segment_center(wall_data, offset=0.0)
         rot = 90 if wall_data["orientation"] == "horizontal" else 0
         add_door_spec(f"{wall_data['id']}_door", dx, dy, rot)
         create_door_visual(f"Door_{wall_data['id']}", dx, dy, rot)
 
 # ---------- Windows only on exterior walls ----------
+def window_count_for_room_type(room_type, wall_length):
+    if wall_length < 2.0:
+        return 0
+
+    if room_type == "living_room":
+        return 2 if wall_length >= 4.5 else 1
+    if room_type == "kitchen":
+        return 1
+    if room_type in ["master_bedroom", "secondary_bedroom"]:
+        return 1
+    if room_type == "bathroom":
+        return 1
+    if room_type == "wc":
+        return 1
+    if room_type in ["laundry", "storage"]:
+        return 0
+    if room_type == "garage":
+        return 0
+
+    return 1
+
+
 for wall_data in walls:
     if wall_data["type"] != "exterior":
         continue
     if not wall_data.get("window_allowed", False):
         continue
-    if wall_data["length"] < WINDOW_WIDTH + 0.5:
+
+    wall_rooms = wall_data.get("rooms", [])
+    if not wall_rooms:
         continue
 
-    wx, wy = point_on_segment_center(wall_data, offset=0.0)
+    room_name = wall_rooms[0]
+    room_data = next((r for r in rooms if r["name"] == room_name), None)
+    if not room_data:
+        continue
+
+    room_type = room_data["type"]
+    count = window_count_for_room_type(room_type, wall_data["length"])
+
+    if count == 0:
+        continue
+
+    x1, y1, x2, y2 = wall_data["x1"], wall_data["y1"], wall_data["x2"], wall_data["y2"]
     rot = 90 if wall_data["orientation"] == "horizontal" else 0
-    add_window_spec(f"{wall_data['id']}_window", wx, wy, rot)
-    create_window_visual(f"Window_{wall_data['id']}", wx, wy, rot)
+
+    for i in range(count):
+        t = (i + 1) / (count + 1)
+
+        wx = x1 + (x2 - x1) * t
+        wy = y1 + (y2 - y1) * t
+
+        add_window_spec(f"{wall_data['id']}_window_{i+1}", wx, wy, rot)
+        create_window_visual(f"Window_{wall_data['id']}_{i+1}", wx, wy, rot, room_type=room_type)
 
 # ---------- Apply boolean cutters ----------
 for spec in door_specs:
