@@ -50,7 +50,7 @@ class UserRequest(BaseModel):
 
 def parse_house_prompt(user_prompt: str):
     response = client.responses.create(
-        model="gpt-5.4",
+        model="gpt-4.1-mini",
         input=f"""
 Convert this house description into JSON.
 

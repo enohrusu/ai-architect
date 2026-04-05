@@ -224,7 +224,7 @@ Return ONLY JSON in this exact format:
 }}
 """
     response = client.responses.create(
-        model="gpt-5.4",
+        model="gpt-4.1-mini",
         input=prompt,
     )
 
