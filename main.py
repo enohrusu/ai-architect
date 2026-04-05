@@ -18,7 +18,7 @@ def create_project_id():
 user_prompt = input("Describe the house: ")
 
 response = client.responses.create(
-    model="gpt-4.1-mini",
+    model="gpt-5.4-mini",
     input=f"""
 Convert this house description into JSON.
 
