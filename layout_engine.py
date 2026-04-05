@@ -11,6 +11,7 @@ def generate_layout(house_data):
     for attempt in range(3):
         try:
             layout = generate_with_ai(house_data)
+            layout = build_walls(layout)
             if validate_layout(layout):
                 return layout
         except Exception as e:
@@ -18,6 +19,75 @@ def generate_layout(house_data):
 
     print("⚠️ Falling back to basic layout")
     return fallback_layout(house_data)
+
+def build_walls(layout):
+    rooms = layout["rooms"]
+    walls = []
+
+    for room in rooms:
+        x = room["x"]
+        y = room["y"]
+        w = room["w"]
+        h = room["h"]
+
+        walls.append({
+            "id": f"{room['name']}_bottom",
+            "type": "exterior",
+            "x1": x,
+            "y1": y,
+            "x2": x + w,
+            "y2": y,
+            "orientation": "horizontal",
+            "length": w,
+            "rooms": [room["name"]],
+            "window_allowed": True,
+            "facade": "south"
+        })
+
+        walls.append({
+            "id": f"{room['name']}_top",
+            "type": "exterior",
+            "x1": x,
+            "y1": y + h,
+            "x2": x + w,
+            "y2": y + h,
+            "orientation": "horizontal",
+            "length": w,
+            "rooms": [room["name"]],
+            "window_allowed": True,
+            "facade": "north"
+        })
+
+        walls.append({
+            "id": f"{room['name']}_left",
+            "type": "exterior",
+            "x1": x,
+            "y1": y,
+            "x2": x,
+            "y2": y + h,
+            "orientation": "vertical",
+            "length": h,
+            "rooms": [room["name"]],
+            "window_allowed": True,
+            "facade": "west"
+        })
+
+        walls.append({
+            "id": f"{room['name']}_right",
+            "type": "exterior",
+            "x1": x + w,
+            "y1": y,
+            "x2": x + w,
+            "y2": y + h,
+            "orientation": "vertical",
+            "length": h,
+            "rooms": [room["name"]],
+            "window_allowed": True,
+            "facade": "east"
+        })
+
+    layout["walls"] = walls
+    return layout
 
 def generate_with_ai(house_data):
     prompt = f"""
