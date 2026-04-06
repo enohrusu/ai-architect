@@ -21,6 +21,60 @@ def snap(value, step=GRID):
 def clamp(value, min_v, max_v):
     return max(min_v, min(value, max_v))
 
+def room_min_dimensions():
+    return {
+        "master_bedroom": (2.5, 2.5),
+        "secondary_bedroom": (2.5, 2.5),
+        "kitchen": (3.0, 3.0),
+        "garage": (3.65, 3.65),
+        "bathroom": (2.0, 2.0),
+        "wc": (1.0, 1.0),
+        "laundry": (1.5, 1.5),
+        "storage": (2.0, 2.0),
+        "living_room": (3.0, 3.0),
+        "corridor": (1.0, 1.0),
+    }
+
+
+def room_has_min_dimensions(room):
+    mins = room_min_dimensions()
+    min_w, min_h = mins.get(room["type"], (1.0, 1.0))
+    return room["w"] >= min_w and room["h"] >= min_h
+
+
+def expand_living_room_to_fill(layout, house_width, house_depth):
+    rooms = layout["rooms"]
+    living = next((r for r in rooms if r["type"] == "living_room"), None)
+    if not living:
+        return layout
+
+    total_room_area = sum(r["w"] * r["h"] for r in rooms)
+    slab_area = house_width * house_depth
+    missing = slab_area - total_room_area
+
+    if missing <= 0:
+        return layout
+
+    # First try extending to the right
+    max_right = house_width - (living["x"] + living["w"])
+    expand_w = min(max_right, missing / max(living["h"], GRID))
+    expand_w = snap(max(0, expand_w))
+
+    if expand_w > 0:
+        living["w"] = snap(living["w"] + expand_w)
+        total_room_area = sum(r["w"] * r["h"] for r in rooms)
+        missing = slab_area - total_room_area
+
+    # Then try extending upward
+    if missing > 0:
+        max_top = house_depth - (living["y"] + living["h"])
+        expand_h = min(max_top, missing / max(living["w"], GRID))
+        expand_h = snap(max(0, expand_h))
+
+        if expand_h > 0:
+            living["h"] = snap(living["h"] + expand_h)
+
+    return layout
 
 def room_rules():
     return {
@@ -56,9 +110,13 @@ def validate_adjacency(layout):
     living = next((r for r in rooms if r["type"] == "living_room"), None)
     kitchen = next((r for r in rooms if r["type"] == "kitchen"), None)
     corridor = next((r for r in rooms if r["type"] == "corridor"), None)
+    bedrooms = [r for r in rooms if r["type"] in ["master_bedroom", "secondary_bedroom"]]
 
     if living and kitchen and not rooms_touch(living, kitchen):
         return False, "Living room must touch kitchen"
+
+    if living and corridor and not rooms_touch(living, corridor):
+        return False, "Living room must touch corridor"
 
     if corridor:
         corridor_connections = 0
@@ -66,8 +124,13 @@ def validate_adjacency(layout):
             if room["name"] != corridor["name"] and rooms_touch(corridor, room):
                 corridor_connections += 1
 
-        if corridor_connections < 2:
+        if corridor_connections < 3:
             return False, "Corridor is not connected enough"
+
+    # Each bedroom must touch corridor
+    for bedroom in bedrooms:
+        if not corridor or not rooms_touch(bedroom, corridor):
+            return False, f"{bedroom['name']} must touch corridor"
 
     return True, "OK"
 
@@ -181,9 +244,8 @@ def validate_total_area_usage(layout, target_area):
     rooms = layout["rooms"]
     total_room_area = sum(r["w"] * r["h"] for r in rooms)
 
-    # Allow some circulation / wall inefficiency, but still require good coverage
-    if total_room_area < target_area * 0.82:
-        return False, f"Plan uses too little area: {total_room_area:.2f} < {target_area * 0.82:.2f}"
+    if total_room_area < target_area * 0.90:
+        return False, f"Plan uses too little area: {total_room_area:.2f} < {target_area * 0.90:.2f}"
 
     return True, "OK"
 
@@ -227,24 +289,31 @@ Generate a UNIQUE realistic single-floor house plan every time.
 Hard rules:
 - The house perimeter must be one rectangle only.
 - All rooms must fit completely inside the perimeter.
-- Snap all room coordinates and dimensions to a 0.5 m grid.
+- Rooms must not overlap.
+- Snap to a 0.5 m grid as much as possible, but logical access is more important than perfect snapping.
 - Use mostly rectangular rooms.
-- Keep the plan compact and realistic.
-- Avoid long oversized corridors.
-- Interior partition logic should be simple and buildable.
-- Windows will only be placed on exterior walls.
-- Return only rooms; wall generation happens later.
-
-Critical rules:
+- The corridor must be as small as possible while still giving logical access.
 - The corridor must be placed in the middle area of the house.
-- The corridor must act as open circulation space and should not be enclosed by its own walls.
-- The exterior front door must be placed later on a living room exterior wall, so the living room must touch the front facade.
+- Bedrooms must access the corridor.
+- Bedrooms should have only one door access to the corridor later, so each bedroom should touch the corridor along one clear side.
+- The corridor should have walls around it except for the connection between living room and corridor.
+- Living room and corridor must connect directly.
 - Living room and kitchen must be adjacent or directly connected.
+- Living room should touch the front facade.
 - Bedrooms should be grouped together in a quieter zone.
-- Bathroom, wc, laundry, storage should be grouped near the bedroom zone.
-- Garage, if present, must touch an exterior edge and preferably be near service spaces.
-- Avoid isolated rooms.
-- Prefer plans that feel like a real house, not random rectangles.
+- Bathroom, wc, laundry, storage should be grouped near bedrooms.
+- Garage, if present, must touch an exterior edge.
+- All rooms together should fill the floor slab as much as possible.
+- If some surface remains, the living room should absorb it.
+
+Minimum dimensions:
+- Bedrooms: at least 2.5 m x 2.5 m
+- Kitchen: at least 3.0 m x 3.0 m
+- Garage: at least 3.65 m x 3.65 m
+- Bathroom: at least 2.0 m x 2.0 m
+- WC: at least 1.0 m x 1.0 m
+- Laundry: at least 1.5 m x 1.5 m
+- Storage: at least 2.0 m x 2.0 m
 
 House rectangle:
 width = {house_width}
@@ -316,9 +385,12 @@ def rectangles_overlap(a, b):
 
 def ensure_minimums(rooms):
     rules = room_rules()
+    min_dims = room_min_dimensions()
 
     for room in rooms:
         room = snap_room(room)
+
+        # area minimum
         area = room["w"] * room["h"]
         min_area = rules.get(room["type"], {}).get("min", 4)
 
@@ -326,6 +398,11 @@ def ensure_minimums(rooms):
             factor = math.sqrt(min_area / max(area, 0.1))
             room["w"] = snap(room["w"] * factor)
             room["h"] = snap(room["h"] * factor)
+
+        # dimension minimums
+        min_w, min_h = min_dims.get(room["type"], (1.0, 1.0))
+        room["w"] = snap(max(room["w"], min_w))
+        room["h"] = snap(max(room["h"], min_h))
 
     return rooms
 
@@ -351,6 +428,9 @@ def validate_layout(layout, room_program, house_width, house_depth):
 
         if room["w"] < GRID or room["h"] < GRID:
             return False, f"Invalid room size: {room['name']}"
+
+        if not room_has_min_dimensions(room):
+            return False, f"Room below minimum dimensions: {room['name']}"
 
         if not inside_perimeter(room, house_width, house_depth):
             return False, f"Room outside perimeter: {room['name']}"
@@ -384,39 +464,44 @@ def validate_corridor_position(layout, house_width, house_depth):
 def fallback_grid_layout(room_program, house_width, house_depth):
     rooms = []
 
-    # Central corridor strip
-    corridor_width = 2.0
+    corridor_width = random.choice([1.0, 1.5])
     corridor_x = snap((house_width - corridor_width) / 2)
-    corridor_width = random.choice([1.5, 2.0, 2.5])
 
     left_zone_width = corridor_x
     right_zone_width = house_width - corridor_x - corridor_width
-
-    flip = random.choice([True, False])
 
     day_rooms = [r for r in room_program if r["type"] in ["living_room", "kitchen"]]
     night_rooms = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
     service_rooms = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
     garage_rooms = [r for r in room_program if r["type"] == "garage"]
 
+    flip = random.choice([True, False])
+
+    left_rooms = day_rooms if not flip else night_rooms
+    right_rooms = night_rooms if not flip else day_rooms
+
     # Corridor in middle
+    corridor_y = snap(house_depth * 0.1)
+    corridor_h = snap(house_depth * 0.8)
+
     rooms.append({
         "name": "corridor",
         "type": "corridor",
         "x": corridor_x,
-        "y": snap(house_depth * 0.15),
+        "y": corridor_y,
         "w": corridor_width,
-        "h": snap(house_depth * 0.7),
+        "h": corridor_h,
     })
 
-    # Left side: living + kitchen
+    # Left side
     y_cursor = 0.0
-    for room in day_rooms:
+    for room in left_rooms:
         target = room["target_area"]
         w = snap(left_zone_width)
         h = snap(target / max(w, GRID))
+
         if y_cursor + h > house_depth:
-            h = snap(house_depth - y_cursor)
+            h = snap(max(GRID, house_depth - y_cursor))
 
         rooms.append({
             "name": room["name"],
@@ -428,29 +513,11 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         })
         y_cursor += h
 
-    # Right side top: bedrooms
+    # Right side
     y_cursor = 0.0
-    for room in night_rooms:
+    for room in right_rooms:
         target = room["target_area"]
         w = snap(right_zone_width)
-        h = snap(target / max(w, GRID))
-        if y_cursor + h > house_depth * 0.7:
-            h = snap(max(GRID, house_depth * 0.7 - y_cursor))
-
-        rooms.append({
-            "name": room["name"],
-            "type": room["type"],
-            "x": corridor_x + corridor_width,
-            "y": y_cursor,
-            "w": w,
-            "h": h,
-        })
-        y_cursor += h
-
-    # Right side bottom: service rooms
-    for room in service_rooms:
-        target = room["target_area"]
-        w = snap(right_zone_width / 2) if room["type"] in ["bathroom", "wc"] else snap(right_zone_width)
         h = snap(target / max(w, GRID))
 
         if y_cursor + h > house_depth:
@@ -466,9 +533,39 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         })
         y_cursor += h
 
-    # Garage at back-left if present
+    # Service rooms try to fill upper-left first
+    sx = 0.0
+    sy = snap(house_depth * 0.7)
+    row_height = 0.0
+
+    for room in service_rooms:
+        w = snap(max(room_min_dimensions().get(room["type"], (1.0, 1.0))[0], math.sqrt(room["target_area"])))
+        h = snap(max(room_min_dimensions().get(room["type"], (1.0, 1.0))[1], room["target_area"] / max(w, GRID)))
+
+        if sx + w > left_zone_width:
+            sx = 0.0
+            sy += row_height
+            row_height = 0.0
+
+        if sy + h > house_depth:
+            continue
+
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": sx,
+            "y": sy,
+            "w": w,
+            "h": h,
+        })
+
+        sx += w
+        row_height = max(row_height, h)
+
+    # Garage fills remaining left-side back area if present
     for room in garage_rooms:
-        garage_h = snap(room["target_area"] / max(left_zone_width, GRID))
+        garage_w = snap(max(3.65, left_zone_width))
+        garage_h = snap(max(3.65, room["target_area"] / max(garage_w, GRID)))
         garage_h = min(garage_h, house_depth * 0.35)
 
         rooms.append({
@@ -476,12 +573,11 @@ def fallback_grid_layout(room_program, house_width, house_depth):
             "type": room["type"],
             "x": 0.0,
             "y": snap(house_depth - garage_h),
-            "w": snap(left_zone_width),
+            "w": garage_w,
             "h": snap(garage_h),
         })
 
-    # Remove invalid zero-size rooms
-    rooms = [r for r in rooms if r["w"] > 0 and r["h"] > 0]
+    rooms = [r for r in rooms if r["w"] >= GRID and r["h"] >= GRID]
 
     return {
         "house": {"width": house_width, "depth": house_depth},
@@ -644,7 +740,7 @@ def generate_layout(house_data):
 
     layout = None
 
-    for _ in range(3):
+    for _ in range(5):
         try:
             candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
 
@@ -656,6 +752,7 @@ def generate_layout(house_data):
 
             candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
             candidate["rooms"] = ensure_minimums(candidate["rooms"])
+            candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
 
             valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
 
@@ -673,6 +770,8 @@ def generate_layout(house_data):
 
     if layout is None:
         layout = fallback_grid_layout(room_program, house_width, house_depth)
+        layout["rooms"] = ensure_minimums(layout["rooms"])
+        layout = expand_living_room_to_fill(layout, house_width, house_depth)
 
     layout = add_surface_labels(layout)
     layout = build_shared_walls(layout)
