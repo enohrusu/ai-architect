@@ -114,14 +114,34 @@ def add_material(obj, material):
     else:
         obj.data.materials.append(material)
 
-def create_entrance_canopy(x, y):
-    canopy = create_box(
-        name="EntranceCanopy",
-        location=(x, y + 0.6, 2.55),
-        scale=(1.2, 0.6, 0.08),
-        material=roof_material
-    )
-    return canopy
+OPENING_CLEARANCE = 0.20
+wall_reserved_spans = {}
+
+
+def get_wall_span_position(wall_data, x, y):
+    if wall_data["orientation"] == "horizontal":
+        return x - min(wall_data["x1"], wall_data["x2"])
+    return y - min(wall_data["y1"], wall_data["y2"])
+
+
+def reserve_span(wall_id, center_pos, half_size):
+    span_min = center_pos - half_size - OPENING_CLEARANCE
+    span_max = center_pos + half_size + OPENING_CLEARANCE
+    wall_reserved_spans.setdefault(wall_id, []).append((span_min, span_max))
+
+
+def span_is_free(wall_id, center_pos, half_size, wall_length):
+    span_min = center_pos - half_size - OPENING_CLEARANCE
+    span_max = center_pos + half_size + OPENING_CLEARANCE
+
+    if span_min < OPENING_CLEARANCE or span_max > wall_length - OPENING_CLEARANCE:
+        return False
+
+    for reserved_min, reserved_max in wall_reserved_spans.get(wall_id, []):
+        if not (span_max <= reserved_min or span_min >= reserved_max):
+            return False
+
+    return True
 
 def create_box(name, location, scale, material=None):
     bpy.ops.mesh.primitive_cube_add(location=location)
@@ -132,13 +152,16 @@ def create_box(name, location, scale, material=None):
         add_material(obj, material)
     return obj
 
-def add_room_label(text, surface, x, y, z=0.02):
+def add_room_label(text, surface, x, y, z=0.03):
     bpy.ops.object.text_add(location=(x, y, z))
     text_obj = bpy.context.active_object
     text_obj.name = f"Label_{text}"
-    text_obj.data.body = f"{text.replace('_', ' ')}\n{surface:.1f} m²"
+    text_obj.data.body = f"{text.replace('_', ' ')}\\n{surface:.1f} m²"
     text_obj.data.size = 0.28
-    text_obj.rotation_euler[0] = math.radians(90)
+    text_obj.data.align_x = 'CENTER'
+    text_obj.data.align_y = 'CENTER'
+    text_obj.rotation_euler[0] = math.radians(90)   # flat on floor
+    text_obj.rotation_euler[1] = 0
     text_obj.rotation_euler[2] = 0
 
 def create_wall_from_segment(wall_data):
@@ -207,27 +230,28 @@ def add_door_spec(name, x, y, rot_z=0):
         "rot_z": rot_z
     })
 
-def create_window_visual(name, x, y, rot_z=0, room_type=None):
-    width = WINDOW_WIDTH
-    height = WINDOW_HEIGHT
-    z_pos = WINDOW_Z
+def create_window_visual(name, x, y, rot_z=0, room_type=None, width=None, height=None, z_pos=None):
+    if width is None or height is None or z_pos is None:
+        width = 1.0
+        height = 1.6
+        z_pos = 1.5
 
-    if room_type in ["bathroom", "wc"]:
-        width = 0.8
-        height = 0.6
-        z_pos = 1.8
-    elif room_type in ["master_bedroom", "secondary_bedroom"]:
-        width = 1.4
-        height = 1.2
-        z_pos = 1.5
-    elif room_type == "kitchen":
-        width = 1.2
-        height = 1.0
-        z_pos = 1.5
-    elif room_type == "living_room":
-        width = 1.8
-        height = 1.3
-        z_pos = 1.4
+        if room_type in ["bathroom", "wc"]:
+            width = 0.6
+            height = 0.9
+            z_pos = 1.8
+        elif room_type in ["master_bedroom", "secondary_bedroom"]:
+            width = 1.0
+            height = 1.5
+            z_pos = 1.4
+        elif room_type == "kitchen":
+            width = 0.9
+            height = 1.3
+            z_pos = 1.5
+        elif room_type == "living_room":
+            width = 1.2
+            height = 1.8
+            z_pos = 1.3
 
     glass = create_box(
         name=name,
@@ -247,12 +271,16 @@ def create_window_visual(name, x, y, rot_z=0, room_type=None):
 
     return glass
 
-def add_window_spec(name, x, y, rot_z=0):
+def add_window_spec(name, x, y, rot_z=0, width=1.0, height=1.6, z_pos=1.5, wall_id=None):
     window_specs.append({
         "name": name,
         "x": x,
         "y": y,
-        "rot_z": rot_z
+        "rot_z": rot_z,
+        "width": width,
+        "height": height,
+        "z_pos": z_pos,
+        "wall_id": wall_id,
     })
 
 def create_door_cutter(spec):
@@ -277,11 +305,14 @@ def create_window_cutter(spec):
     x = spec["x"]
     y = spec["y"]
     rot_z = spec["rot_z"]
+    width = spec.get("width", 1.0)
+    height = spec.get("height", 1.6)
+    z_pos = spec.get("z_pos", 1.5)
 
     cutter = create_box(
         name=f"{spec['name']}_cutter",
-        location=(x, y, WINDOW_Z),
-        scale=(WINDOW_DEPTH / 2, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
+        location=(x, y, z_pos),
+        scale=(WINDOW_DEPTH / 2, width / 2, height / 2)
     )
     cutter.rotation_euler[2] = math.radians(rot_z)
     cutter.display_type = 'WIRE'
@@ -301,19 +332,21 @@ def point_on_segment_center(wall_data, offset=0.0):
         return cx, cy + offset
     return cx + offset, cy
 
+
+
 # ---------- Structural slabs ----------
 floor = create_box(
     name="FloorSlab",
     location=(center_x, center_y, -FLOOR_THICKNESS / 2),
-    scale=(house_width / 2, house_depth / 2, FLOOR_THICKNESS / 2),
+    scale=((house_width - exterior_wall_thickness) / 2, (house_depth - exterior_wall_thickness) / 2, FLOOR_THICKNESS / 2),
     material=floor_material
 )
 
-ceiling = create_box(
-    name="CeilingSlab",
-    location=(center_x, center_y, WALL_HEIGHT + CEILING_THICKNESS / 2),
-    scale=(house_width / 2, house_depth / 2, CEILING_THICKNESS / 2),
-    material=ceiling_material
+floor = create_box(
+    name="FloorSlab",
+    location=(center_x, center_y, -FLOOR_THICKNESS / 2),
+    scale=((house_width - exterior_wall_thickness) / 2, (house_depth - exterior_wall_thickness) / 2, FLOOR_THICKNESS / 2),
+    material=floor_material
 )
 
 roof = create_box(
@@ -334,14 +367,23 @@ for wall_data in walls:
     create_wall_from_segment(wall_data)
 
 # ---------- Doors ----------
-# front door on south facade if possible
-south_walls = [w for w in walls if w["type"] == "exterior" and w.get("facade") == "south" and w["length"] >= DOOR_WIDTH + 0.5]
-if south_walls:
-    front_wall = max(south_walls, key=lambda w: w["length"])
+# front door on south living room wall if possible
+south_living_walls = [
+    w for w in walls
+    if w["type"] == "exterior"
+    and w.get("facade") == "south"
+    and w["length"] >= DOOR_WIDTH + 0.5
+    and any(r == "living_room" for r in w.get("rooms", []))
+]
+
+if south_living_walls:
+    front_wall = max(south_living_walls, key=lambda w: w["length"])
     dx, dy = point_on_segment_center(front_wall, offset=0.0)
     add_door_spec("front_door", dx, dy, 90)
     create_door_visual("Door_front", dx, dy, 90)
-    create_entrance_canopy(dx, dy)
+
+    front_pos = get_wall_span_position(front_wall, dx, dy)
+    reserve_span(front_wall["id"], front_pos, DOOR_WIDTH / 2)
 
 # ---------- Garage exterior door ----------
 garage_exterior_walls = [
@@ -358,6 +400,15 @@ if garage_exterior_walls:
 
     add_garage_door_spec("garage_main_door", gx, gy, grot)
     create_garage_door_visual("GarageDoor_main", gx, gy, grot)
+
+garage_pos = get_wall_span_position(garage_wall, gx, gy)
+reserve_span(garage_wall["id"], garage_pos, 2.6 / 2)
+
+exterior_wall_thickness = 0.20
+if walls:
+    exterior_thicknesses = [w["thickness"] for w in walls if w["type"] == "exterior"]
+    if exterior_thicknesses:
+        exterior_wall_thickness = max(exterior_thicknesses)
 
 # interior doors: one per interior wall if long enough
 ROOM_TYPES_NEED_PRIVATE_DOOR = {
@@ -422,25 +473,31 @@ for wall_data in walls:
         create_door_visual(f"Door_{wall_data['id']}", dx, dy, rot)
 
 # ---------- Windows only on exterior walls ----------
+def window_dimensions_for_room_type(room_type):
+    if room_type in ["bathroom", "wc"]:
+        return 0.6, 0.9, 1.8
+    if room_type in ["master_bedroom", "secondary_bedroom"]:
+        return 1.0, 1.5, 1.4
+    if room_type == "kitchen":
+        return 0.9, 1.3, 1.5
+    if room_type == "living_room":
+        return 1.2, 1.8, 1.3
+    return 0.9, 1.4, 1.5
+
+
 def window_count_for_room_type(room_type, wall_length):
     if wall_length < 2.0:
         return 0
-
     if room_type == "living_room":
-        return 2 if wall_length >= 4.5 else 1
+        return 2 if wall_length >= 4.8 else 1
     if room_type == "kitchen":
         return 1
     if room_type in ["master_bedroom", "secondary_bedroom"]:
         return 1
-    if room_type == "bathroom":
+    if room_type in ["bathroom", "wc"]:
         return 1
-    if room_type == "wc":
-        return 1
-    if room_type in ["laundry", "storage"]:
+    if room_type in ["laundry", "storage", "garage"]:
         return 0
-    if room_type == "garage":
-        return 0
-
     return 1
 
 
@@ -465,17 +522,51 @@ for wall_data in walls:
     if count == 0:
         continue
 
+    width, height, z_pos = window_dimensions_for_room_type(room_type)
+    half_size = width / 2
+
     x1, y1, x2, y2 = wall_data["x1"], wall_data["y1"], wall_data["x2"], wall_data["y2"]
     rot = 90 if wall_data["orientation"] == "horizontal" else 0
 
-    for i in range(count):
-        t = (i + 1) / (count + 1)
+    placed = 0
+    attempts = max(3, count + 2)
 
+    for i in range(attempts):
+        if placed >= count:
+            break
+
+        t = (i + 1) / (attempts + 1)
         wx = x1 + (x2 - x1) * t
         wy = y1 + (y2 - y1) * t
 
-        add_window_spec(f"{wall_data['id']}_window_{i+1}", wx, wy, rot)
-        create_window_visual(f"Window_{wall_data['id']}_{i+1}", wx, wy, rot, room_type=room_type)
+        local_pos = get_wall_span_position(wall_data, wx, wy)
+
+        if not span_is_free(wall_data["id"], local_pos, half_size, wall_data["length"]):
+            continue
+
+        add_window_spec(
+            f"{wall_data['id']}_window_{placed+1}",
+            wx,
+            wy,
+            rot,
+            width=width,
+            height=height,
+            z_pos=z_pos,
+            wall_id=wall_data["id"],
+        )
+        create_window_visual(
+            f"Window_{wall_data['id']}_{placed+1}",
+            wx,
+            wy,
+            rot,
+            room_type=room_type,
+            width=width,
+            height=height,
+            z_pos=z_pos,
+        )
+
+        reserve_span(wall_data["id"], local_pos, half_size)
+        placed += 1
 
 # ---------- Apply boolean cutters ----------
 for spec in door_specs:
