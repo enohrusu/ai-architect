@@ -257,7 +257,7 @@ Return ONLY JSON in this exact format:
 }}
 """
     response = client.responses.create(
-        model="gpt-5.4",
+        model="gpt-4.1-mini",
         input=prompt,
     )
 
@@ -618,7 +618,13 @@ def generate_layout(house_data):
 
     for _ in range(3):
         try:
-            candidate = ask_openai_for_layout(...)
+            candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
+
+            if "house" not in candidate:
+                candidate["house"] = {}
+
+            candidate["house"]["width"] = house_width
+            candidate["house"]["depth"] = house_depth
 
             candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
             candidate["rooms"] = ensure_minimums(candidate["rooms"])
@@ -630,8 +636,8 @@ def generate_layout(house_data):
                 corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
 
                 if valid_adj and corridor_ok:
-                        layout = candidate
-                        break
+                    layout = candidate
+                    break
 
         except Exception:
             pass
