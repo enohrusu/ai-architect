@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import random
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -176,6 +177,15 @@ def build_room_program(house_data):
 
     return targets
 
+def validate_total_area_usage(layout, target_area):
+    rooms = layout["rooms"]
+    total_room_area = sum(r["w"] * r["h"] for r in rooms)
+
+    # Allow some circulation / wall inefficiency, but still require good coverage
+    if total_room_area < target_area * 0.82:
+        return False, f"Plan uses too little area: {total_room_area:.2f} < {target_area * 0.82:.2f}"
+
+    return True, "OK"
 
 def classify_room_groups(room_program):
     day_zone = []
@@ -200,6 +210,14 @@ def classify_room_groups(room_program):
 
 def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
     grouped = classify_room_groups(room_program)
+
+    variation_hint = random.choice([
+        "Use a wider day zone and compact bedroom cluster.",
+        "Use a compact central corridor with day zone on the south side.",
+        "Use a balanced left-right split between day and night zones.",
+        "Use a slightly asymmetric but realistic arrangement.",
+        "Use a compact plan with the corridor centrally placed and rooms around it.",
+    ])
 
     prompt = f"""
 You are an architectural layout planner.
@@ -237,6 +255,10 @@ Room program:
 
 Grouped zones:
 {json.dumps(grouped, indent=2)}
+
+Variation target:
+- {variation_hint}
+- Produce a different valid plan than a standard grid layout.
 
 Return ONLY JSON in this exact format:
 {{
@@ -327,7 +349,7 @@ def validate_layout(layout, room_program, house_width, house_depth):
         if not all(k in room for k in ["name", "type", "x", "y", "w", "h"]):
             return False, f"Invalid room: {room}"
 
-        if room["w"] <= 0 or room["h"] <= 0:
+        if room["w"] < GRID or room["h"] < GRID:
             return False, f"Invalid room size: {room['name']}"
 
         if not inside_perimeter(room, house_width, house_depth):
@@ -360,105 +382,111 @@ def validate_corridor_position(layout, house_width, house_depth):
     return True, "OK"
 
 def fallback_grid_layout(room_program, house_width, house_depth):
-    day = [r for r in room_program if r["type"] in ["living_room", "kitchen"]]
-    night = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
-    service = [r for r in room_program if r["type"] not in ["living_room", "kitchen", "master_bedroom", "secondary_bedroom"]]
-
     rooms = []
 
-    day_band_depth = snap(house_depth * 0.42)
-    night_band_depth = snap(house_depth * 0.38)
-    service_band_depth = snap(house_depth - day_band_depth - night_band_depth)
+    # Central corridor strip
+    corridor_width = 2.0
+    corridor_x = snap((house_width - corridor_width) / 2)
+    corridor_width = random.choice([1.5, 2.0, 2.5])
 
-    # Day zone on south/front
-    x = 0.0
-    for room in day:
-        if room["type"] == "living_room":
-            w = snap(max(house_width * 0.55, math.sqrt(room["target_area"] * 1.3)))
-        else:
-            w = snap(max(house_width * 0.25, math.sqrt(room["target_area"] * 1.1)))
+    left_zone_width = corridor_x
+    right_zone_width = house_width - corridor_x - corridor_width
 
-        h = snap(room["target_area"] / max(w, GRID))
-        h = min(day_band_depth, max(GRID, h))
+    flip = random.choice([True, False])
 
-        if x + w > house_width:
-            w = snap(house_width - x)
+    day_rooms = [r for r in room_program if r["type"] in ["living_room", "kitchen"]]
+    night_rooms = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
+    service_rooms = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
+    garage_rooms = [r for r in room_program if r["type"] == "garage"]
 
-        rooms.append({
-            "name": room["name"],
-            "type": room["type"],
-            "x": x,
-            "y": 0.0,
-            "w": w,
-            "h": h
-        })
-        x += w
+    # Corridor in middle
+    rooms.append({
+        "name": "corridor",
+        "type": "corridor",
+        "x": corridor_x,
+        "y": snap(house_depth * 0.15),
+        "w": corridor_width,
+        "h": snap(house_depth * 0.7),
+    })
 
-    # Night zone in middle
-    x = 0.0
-    row_y = day_band_depth
-    row_height = 0.0
-
-    for room in night:
-        w = snap(math.sqrt(room["target_area"] * 1.15))
-        h = snap(room["target_area"] / max(w, GRID))
-
-        if x + w > house_width:
-            x = 0.0
-            row_y += row_height
-            row_height = 0.0
-
-        if row_y + h > day_band_depth + night_band_depth:
-            h = snap((day_band_depth + night_band_depth) - row_y)
+    # Left side: living + kitchen
+    y_cursor = 0.0
+    for room in day_rooms:
+        target = room["target_area"]
+        w = snap(left_zone_width)
+        h = snap(target / max(w, GRID))
+        if y_cursor + h > house_depth:
+            h = snap(house_depth - y_cursor)
 
         rooms.append({
             "name": room["name"],
             "type": room["type"],
-            "x": x,
-            "y": row_y,
+            "x": 0.0,
+            "y": y_cursor,
             "w": w,
-            "h": h
+            "h": h,
         })
+        y_cursor += h
 
-        x += w
-        row_height = max(row_height, h)
-
-    # Service zone at back
-    x = 0.0
-    row_y = day_band_depth + night_band_depth
-    row_height = 0.0
-
-    for room in service:
-        if room["type"] == "garage":
-            w = snap(max(5.5, math.sqrt(room["target_area"] * 1.2)))
-        elif room["type"] == "corridor":
-            w = snap(max(1.5, math.sqrt(room["target_area"] * 0.8)))
-        else:
-            w = snap(math.sqrt(room["target_area"] * 1.0))
-
-        h = snap(room["target_area"] / max(w, GRID))
-
-        if x + w > house_width:
-            x = 0.0
-            row_y += row_height
-            row_height = 0.0
-
-        if row_y + h > house_depth:
-            h = snap(house_depth - row_y)
+    # Right side top: bedrooms
+    y_cursor = 0.0
+    for room in night_rooms:
+        target = room["target_area"]
+        w = snap(right_zone_width)
+        h = snap(target / max(w, GRID))
+        if y_cursor + h > house_depth * 0.7:
+            h = snap(max(GRID, house_depth * 0.7 - y_cursor))
 
         rooms.append({
             "name": room["name"],
             "type": room["type"],
-            "x": x,
-            "y": row_y,
+            "x": corridor_x + corridor_width,
+            "y": y_cursor,
             "w": w,
-            "h": h
+            "h": h,
+        })
+        y_cursor += h
+
+    # Right side bottom: service rooms
+    for room in service_rooms:
+        target = room["target_area"]
+        w = snap(right_zone_width / 2) if room["type"] in ["bathroom", "wc"] else snap(right_zone_width)
+        h = snap(target / max(w, GRID))
+
+        if y_cursor + h > house_depth:
+            h = snap(max(GRID, house_depth - y_cursor))
+
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": corridor_x + corridor_width,
+            "y": y_cursor,
+            "w": w,
+            "h": h,
+        })
+        y_cursor += h
+
+    # Garage at back-left if present
+    for room in garage_rooms:
+        garage_h = snap(room["target_area"] / max(left_zone_width, GRID))
+        garage_h = min(garage_h, house_depth * 0.35)
+
+        rooms.append({
+            "name": room["name"],
+            "type": room["type"],
+            "x": 0.0,
+            "y": snap(house_depth - garage_h),
+            "w": snap(left_zone_width),
+            "h": snap(garage_h),
         })
 
-        x += w
-        row_height = max(row_height, h)
+    # Remove invalid zero-size rooms
+    rooms = [r for r in rooms if r["w"] > 0 and r["h"] > 0]
 
-    return {"house": {"width": house_width, "depth": house_depth}, "rooms": rooms}
+    return {
+        "house": {"width": house_width, "depth": house_depth},
+        "rooms": rooms
+    }
 
 
 def add_surface_labels(layout):
@@ -634,8 +662,9 @@ def generate_layout(house_data):
             if valid:
                 valid_adj, adj_msg = validate_adjacency(candidate)
                 corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
+                area_ok, area_msg = validate_total_area_usage(candidate, total_area)
 
-                if valid_adj and corridor_ok:
+                if valid_adj and corridor_ok and area_ok:
                     layout = candidate
                     break
 
