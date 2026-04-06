@@ -617,24 +617,24 @@ def generate_layout(house_data):
     layout = None
 
     for _ in range(3):
-    try:
-        candidate = ask_openai_for_layout(...)
+        try:
+            candidate = ask_openai_for_layout(...)
 
-        candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
-        candidate["rooms"] = ensure_minimums(candidate["rooms"])
+            candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
+            candidate["rooms"] = ensure_minimums(candidate["rooms"])
 
-        valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
+            valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
 
-        if valid:
-            valid_adj, adj_msg = validate_adjacency(candidate)
-            corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
+            if valid:
+                valid_adj, adj_msg = validate_adjacency(candidate)
+                corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
 
-            if valid_adj and corridor_ok:
-                layout = candidate
-                break
+                if valid_adj and corridor_ok:
+                        layout = candidate
+                        break
 
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     if layout is None:
         layout = fallback_grid_layout(room_program, house_width, house_depth)
