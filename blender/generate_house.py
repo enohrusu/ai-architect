@@ -40,6 +40,12 @@ house_depth = house.get("depth", 10)
 center_x = house_width / 2
 center_y = house_depth / 2
 
+exterior_wall_thickness = 0.20
+if walls:
+    exterior_thicknesses = [w["thickness"] for w in walls if w["type"] == "exterior"]
+    if exterior_thicknesses:
+        exterior_wall_thickness = max(exterior_thicknesses)
+
 # ---------- Parameters ----------
 WALL_HEIGHT = 3.0
 FLOOR_THICKNESS = 0.18
@@ -403,12 +409,6 @@ if garage_exterior_walls:
 
 garage_pos = get_wall_span_position(garage_wall, gx, gy)
 reserve_span(garage_wall["id"], garage_pos, 2.6 / 2)
-
-exterior_wall_thickness = 0.20
-if walls:
-    exterior_thicknesses = [w["thickness"] for w in walls if w["type"] == "exterior"]
-    if exterior_thicknesses:
-        exterior_wall_thickness = max(exterior_thicknesses)
 
 # interior doors: one per interior wall if long enough
 ROOM_TYPES_NEED_PRIVATE_DOOR = {
