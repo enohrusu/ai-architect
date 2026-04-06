@@ -536,7 +536,7 @@ def build_shared_walls(layout):
         x1, y1, x2, y2 = seg
         is_exterior, facade = on_outer_perimeter(seg, house_width, house_depth)
 
-                owner_room_types = [o["room_type"] for o in owners]
+        owner_room_types = [o["room_type"] for o in owners]
 
         # Corridor must remain open: do not create walls if a corridor owns this edge
         if "corridor" in owner_room_types:
@@ -595,7 +595,6 @@ def build_shared_walls(layout):
             )
 
     return layout | {"walls": walls}
-
 
 def add_metadata(layout):
     layout["wall_rules"] = {
