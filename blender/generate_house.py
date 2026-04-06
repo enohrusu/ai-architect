@@ -123,6 +123,8 @@ def add_material(obj, material):
 OPENING_CLEARANCE = 0.20
 wall_reserved_spans = {}
 
+def get_wall_by_id(wall_id):
+    return next((w for w in walls if w["id"] == wall_id), None)
 
 def get_wall_span_position(wall_data, x, y):
     if wall_data["orientation"] == "horizontal":
@@ -372,56 +374,37 @@ for room in rooms:
 for wall_data in walls:
     create_wall_from_segment(wall_data)
 
-# ---------- Doors ----------
-# front door on south living room wall if possible
-south_living_walls = [
-    w for w in walls
-    if w["type"] == "exterior"
-    and w.get("facade") == "south"
-    and w["length"] >= DOOR_WIDTH + 0.5
-    and any(r == "living_room" for r in w.get("rooms", []))
-]
+# ---------- Doors from circulation plan ----------
+for door in door_plan:
+    wall_data = get_wall_by_id(door["wall_id"])
+    if not wall_data:
+        continue
 
-if south_living_walls:
-    front_wall = max(south_living_walls, key=lambda w: w["length"])
-    dx, dy = point_on_segment_center(front_wall, offset=0.0)
-    add_door_spec("front_door", dx, dy, 90)
-    create_door_visual("Door_front", dx, dy, 90)
+    door_width = door.get("width", DOOR_WIDTH)
+    dx, dy = point_on_segment_center(wall_data, offset=0.0)
+    rot = 90 if wall_data["orientation"] == "horizontal" else 0
 
-    front_pos = get_wall_span_position(front_wall, dx, dy)
-    reserve_span(front_wall["id"], front_pos, DOOR_WIDTH / 2)
+    spec = {
+        "name": f"{door['wall_id']}_door",
+        "x": dx,
+        "y": dy,
+        "rot_z": rot,
+        "width": door_width,
+        "height": DOOR_HEIGHT,
+        "depth": DOOR_DEPTH,
+    }
 
-# ---------- Garage exterior door ----------
-garage_exterior_walls = [
-    w for w in walls
-    if w["type"] == "exterior"
-    and w["length"] >= 2.8
-    and any(r.startswith("garage") for r in w.get("rooms", []))
-]
+    door_specs.append(spec)
 
-if garage_exterior_walls:
-    garage_wall = max(garage_exterior_walls, key=lambda w: w["length"])
-    gx, gy = point_on_segment_center(garage_wall, offset=0.0)
-    grot = 90 if garage_wall["orientation"] == "horizontal" else 0
+    if door["type"] == "front":
+        create_door_visual("Door_front", dx, dy, rot)
+    elif "garage" in door.get("rooms", []):
+        create_garage_door_visual(f"Door_{door['wall_id']}", dx, dy, rot)
+    else:
+        create_door_visual(f"Door_{door['wall_id']}", dx, dy, rot)
 
-    add_garage_door_spec("garage_main_door", gx, gy, grot)
-    create_garage_door_visual("GarageDoor_main", gx, gy, grot)
-
-garage_pos = get_wall_span_position(garage_wall, gx, gy)
-reserve_span(garage_wall["id"], garage_pos, 2.6 / 2)
-
-# interior doors: one per interior wall if long enough
-ROOM_TYPES_NEED_PRIVATE_DOOR = {
-    "master_bedroom",
-    "secondary_bedroom",
-    "bathroom",
-    "wc",
-    "laundry",
-    "storage",
-    "garage",
-}
-
-door_added_for_room = set()
+    local_pos = get_wall_span_position(wall_data, dx, dy)
+    reserve_span(wall_data["id"], local_pos, door_width / 2)
 
 for wall_data in walls:
     if wall_data["type"] != "interior":
@@ -627,6 +610,9 @@ if mesh_objs:
 
 print("Number of objects in scene:", len(bpy.data.objects))
 print("Number of walls:", len(walls))
+
+circulation = layout_data.get("circulation", {})
+door_plan = circulation.get("doors", [])
 
 # ---------- Save Blender file ----------
 output_blend = os.path.join(project_folder, "generated_house.blend")
