@@ -176,17 +176,21 @@ def room_name(room_type, index, all_rooms):
     return f"{room_type}_{index}"
 
 
-def estimate_house_rectangle(total_area):
-    width = math.sqrt(total_area * 1.18)
-    depth = total_area / max(width, 1)
+def estimate_house_rectangles(total_area):
+    candidates = []
 
-    width = snap(width)
-    depth = snap(depth)
+    for width in [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15]:
+        depth = total_area / width
+        depth = snap(depth)
 
-    if width < depth:
-        width, depth = depth, width
+        if depth < 8 or depth > 16:
+            continue
 
-    return width, depth
+        candidates.append((snap(width), snap(depth)))
+
+    # prefer more compact rectangles first
+    candidates.sort(key=lambda wh: abs(wh[0] - wh[1]))
+    return candidates
 
 
 def build_room_program(house_data):
@@ -884,7 +888,7 @@ def build_circulation_plan(layout):
             continue
 
         types = {room_a["type"], room_b["type"]}
-        names = {room_a["name"], room_b["name"]}
+    
 
         # one side must be corridor
         if "corridor" not in types:
@@ -976,6 +980,199 @@ def validate_required_corridor_contacts(layout):
 
     return True, "OK"
 
+def build_corridor_shapes(house_width, house_depth, shape_type="straight"):
+    cx = house_width / 2
+    cy = house_depth / 2
+
+    if shape_type == "straight":
+        parts = [
+            {"x": snap(cx - 0.65), "y": snap(cy - 1.25), "w": 1.3, "h": 2.5}
+        ]
+    elif shape_type == "L":
+        parts = [
+            {"x": snap(cx - 0.65), "y": snap(cy - 1.25), "w": 1.3, "h": 2.5},
+            {"x": snap(cx - 0.65), "y": snap(cy - 1.25), "w": 3.0, "h": 1.3}
+        ]
+    elif shape_type == "T":
+        parts = [
+            {"x": snap(cx - 0.65), "y": snap(cy - 1.25), "w": 1.3, "h": 2.5},
+            {"x": snap(cx - 1.5), "y": snap(cy + 0.2), "w": 3.0, "h": 1.3}
+        ]
+    else:
+        parts = [
+            {"x": snap(cx - 0.65), "y": snap(cy - 1.25), "w": 1.3, "h": 2.5}
+        ]
+
+    return parts
+
+SIM_GRID = 0.1
+CIRCLE_RADIUS = 0.3
+
+
+def point_in_room(px, py, room):
+    return (
+        room["x"] <= px <= room["x"] + room["w"]
+        and room["y"] <= py <= room["y"] + room["h"]
+    )
+
+
+def room_center(room):
+    return (
+        room["x"] + room["w"] / 2,
+        room["y"] + room["h"] / 2
+    )
+
+
+def to_cell(x, y):
+    return (int(round(x / SIM_GRID)), int(round(y / SIM_GRID)))
+
+
+def to_world(i, j):
+    return (i * SIM_GRID, j * SIM_GRID)
+
+def build_blocked_cells(layout):
+    blocked = set()
+    walls = layout.get("walls", [])
+    house = layout["house"]
+
+    inflate = CIRCLE_RADIUS
+
+    for wall in walls:
+        x1, y1, x2, y2 = wall["x1"], wall["y1"], wall["x2"], wall["y2"]
+        t = wall["thickness"]
+
+        if wall["orientation"] == "horizontal":
+            min_x = min(x1, x2)
+            max_x = max(x1, x2)
+            min_y = y1 - t / 2
+            max_y = y1 + t / 2
+        else:
+            min_x = x1 - t / 2
+            max_x = x1 + t / 2
+            min_y = min(y1, y2)
+            max_y = max(y1, y2)
+
+        # inflate by circle radius
+        min_x -= inflate
+        max_x += inflate
+        min_y -= inflate
+        max_y += inflate
+
+        i1, j1 = to_cell(min_x, min_y)
+        i2, j2 = to_cell(max_x, max_y)
+
+        for i in range(i1, i2 + 1):
+            for j in range(j1, j2 + 1):
+                blocked.add((i, j))
+
+    return blocked
+
+def carve_doors_from_blocked(blocked, layout):
+    walls_by_id = {w["id"]: w for w in layout.get("walls", [])}
+    circulation = layout.get("circulation", {})
+    doors = circulation.get("doors", [])
+
+    for door in doors:
+        wall = walls_by_id.get(door["wall_id"])
+        if not wall:
+            continue
+
+        width = door.get("width", 0.9)
+        cx = (wall["x1"] + wall["x2"]) / 2
+        cy = (wall["y1"] + wall["y2"]) / 2
+
+        if wall["orientation"] == "horizontal":
+            min_x = cx - width / 2 - CIRCLE_RADIUS
+            max_x = cx + width / 2 + CIRCLE_RADIUS
+            min_y = cy - wall["thickness"] / 2 - CIRCLE_RADIUS
+            max_y = cy + wall["thickness"] / 2 + CIRCLE_RADIUS
+        else:
+            min_x = cx - wall["thickness"] / 2 - CIRCLE_RADIUS
+            max_x = cx + wall["thickness"] / 2 + CIRCLE_RADIUS
+            min_y = cy - width / 2 - CIRCLE_RADIUS
+            max_y = cy + width / 2 + CIRCLE_RADIUS
+
+        i1, j1 = to_cell(min_x, min_y)
+        i2, j2 = to_cell(max_x, max_y)
+
+        for i in range(i1, i2 + 1):
+            for j in range(j1, j2 + 1):
+                blocked.discard((i, j))
+
+    return blocked
+
+def build_walkable_cells(layout):
+    house = layout["house"]
+    rooms = layout["rooms"]
+
+    walkable = set()
+
+    i_max = int(math.ceil(house["width"] / SIM_GRID))
+    j_max = int(math.ceil(house["depth"] / SIM_GRID))
+
+    for i in range(i_max + 1):
+        for j in range(j_max + 1):
+            x, y = to_world(i, j)
+
+            if x < 0 or y < 0 or x > house["width"] or y > house["depth"]:
+                continue
+
+            for room in rooms:
+                if point_in_room(x, y, room):
+                    walkable.add((i, j))
+                    break
+
+    blocked = build_blocked_cells(layout)
+    blocked = carve_doors_from_blocked(blocked, layout)
+
+    return walkable - blocked
+
+from collections import deque
+
+
+def bfs_path_exists(walkable, start, goal):
+    if start not in walkable or goal not in walkable:
+        return False
+
+    q = deque([start])
+    seen = {start}
+
+    directions = [(1,0), (-1,0), (0,1), (0,-1)]
+
+    while q:
+        cur = q.popleft()
+        if cur == goal:
+            return True
+
+        for dx, dy in directions:
+            nxt = (cur[0] + dx, cur[1] + dy)
+            if nxt in walkable and nxt not in seen:
+                seen.add(nxt)
+                q.append(nxt)
+
+    return False
+
+def validate_circle_circulation(layout):
+    rooms = layout["rooms"]
+    living = next((r for r in rooms if r["type"] == "living_room"), None)
+
+    if not living:
+        return False, "Missing living room"
+
+    walkable = build_walkable_cells(layout)
+    start = to_cell(*room_center(living))
+
+    for room in rooms:
+        if room["name"] == living["name"]:
+            continue
+
+        target = to_cell(*room_center(room))
+
+        if not bfs_path_exists(walkable, start, target):
+            return False, f"0.6 m circle cannot reach {room['name']} from living room"
+
+    return True, "OK"
+
 def add_metadata(layout):
     layout["wall_rules"] = {
         "interior_wall_thickness_m": INTERIOR_WALL_THICKNESS,
@@ -1008,45 +1205,65 @@ def has_all_required_rooms(layout, room_program):
 
 def generate_layout(house_data):
     total_area = float(house_data.get("area_m2", 120))
-    house_width, house_depth = estimate_house_rectangle(total_area)
+    slab_candidates = estimate_house_rectangles(total_area)
     room_program = build_room_program(house_data)
 
     layout = None
 
-    for _ in range(5):
-        try:
-            candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
+    for house_width, house_depth in slab_candidates:
+        for _ in range(5):
+            try:
+                candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
 
-            if "house" not in candidate:
-                candidate["house"] = {}
+                if "house" not in candidate:
+                    candidate["house"] = {}
 
-            candidate["house"]["width"] = house_width
-            candidate["house"]["depth"] = house_depth
+                candidate["house"]["width"] = house_width
+                candidate["house"]["depth"] = house_depth
 
-            candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
-            candidate["rooms"] = ensure_minimums(candidate["rooms"])
-            candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
+                candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
+                candidate["rooms"] = ensure_minimums(candidate["rooms"])
+                candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
 
-            if not has_all_required_rooms(candidate, room_program):
-                continue
+                if not has_all_required_rooms(candidate, room_program):
+                    continue
 
-            valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
+                valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
 
-            if valid:
-                valid_adj, adj_msg = validate_adjacency(candidate)
-                corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
-                area_ok, area_msg = validate_total_area_usage(candidate, total_area)
-                overlap_ok, overlap_msg = validate_no_overlap_strict(candidate)
-                required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(candidate)
+                if valid:
+                    valid_adj, adj_msg = validate_adjacency(candidate)
+                    corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
+                    area_ok, area_msg = validate_total_area_usage(candidate, total_area)
+                    overlap_ok, overlap_msg = validate_no_overlap_strict(candidate)
+                    required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(candidate)
 
-                if valid_adj and corridor_ok and area_ok and overlap_ok and required_corridor_ok:
-                    layout = candidate
-                    break
+                    candidate = add_surface_labels(candidate)
+                    candidate = build_shared_walls(candidate)
+                    candidate = build_circulation_plan(candidate)
 
-        except Exception:
-            pass
+                    circle_ok, circle_msg = validate_circle_circulation(candidate)
+
+                    if (
+                        valid_adj
+                        and corridor_ok
+                        and area_ok
+                        and overlap_ok
+                        and required_corridor_ok
+                        and circle_ok
+                    ):
+                        layout = candidate
+                        break
+
+            except Exception:
+                pass
+
+        if layout is not None:
+            break
 
     if layout is None:
+        # use the most compact slab candidate first
+        house_width, house_depth = slab_candidates[0]
+
         layout = fallback_grid_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
         layout = expand_living_room_to_fill(layout, house_width, house_depth)
@@ -1061,7 +1278,21 @@ def generate_layout(house_data):
         overlap_ok, overlap_msg = validate_no_overlap_strict(layout)
         required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(layout)
 
-        if not (valid and valid_adj and corridor_ok and area_ok and overlap_ok and required_corridor_ok):
+        layout = add_surface_labels(layout)
+        layout = build_shared_walls(layout)
+        layout = build_circulation_plan(layout)
+
+        circle_ok, circle_msg = validate_circle_circulation(layout)
+
+        if not (
+            valid
+            and valid_adj
+            and corridor_ok
+            and area_ok
+            and overlap_ok
+            and required_corridor_ok
+            and circle_ok
+        ):
             print(
                 "Fallback layout invalid:",
                 msg,
@@ -1070,11 +1301,8 @@ def generate_layout(house_data):
                 area_msg,
                 overlap_msg,
                 required_corridor_msg,
+                circle_msg,
             )
 
-    layout = add_surface_labels(layout)
-    layout = build_shared_walls(layout)
-    layout = build_circulation_plan(layout)
     layout = add_metadata(layout)
-
     return layout
