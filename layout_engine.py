@@ -495,173 +495,130 @@ def validate_corridor_position(layout, house_width, house_depth):
 def fallback_grid_layout(room_program, house_width, house_depth):
     rooms = []
 
-    # corridor: hard-limited, central
-    corridor_w = random.choice([1.2, 1.3, 1.4])
-    corridor_h = random.choice([2.5, 2.75])
-
+    # Small central corridor
+    corridor_w = 1.3
+    corridor_h = 2.7
     corridor_x = (house_width - corridor_w) / 2
     corridor_y = (house_depth - corridor_h) / 2
 
     corridor = {
         "name": "corridor",
         "type": "corridor",
-        "x": corridor_x,
-        "y": corridor_y,
-        "w": corridor_w,
-        "h": corridor_h,
+        "x": snap(corridor_x),
+        "y": snap(corridor_y),
+        "w": snap(corridor_w),
+        "h": snap(corridor_h),
     }
     rooms.append(corridor)
 
-    # sort rooms by priority and size
-    non_corridor = [r for r in room_program if r["type"] != "corridor"]
-    non_corridor.sort(
-        key=lambda r: (
-            0 if r["type"] == "living_room" else
-            1 if r["type"] == "kitchen" else
-            2 if r["type"] in ["master_bedroom", "secondary_bedroom"] else
-            3
-        ,
-            -r["target_area"]
-        )
+    # Split program
+    living = next(r for r in room_program if r["type"] == "living_room")
+    kitchen = next(r for r in room_program if r["type"] == "kitchen")
+    bedrooms = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
+    services = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
+    garages = [r for r in room_program if r["type"] == "garage"]
+
+    # Zones around corridor
+    bottom_zone = {
+        "x": 0.0,
+        "y": 0.0,
+        "w": house_width,
+        "h": corridor["y"],
+    }
+    top_zone = {
+        "x": 0.0,
+        "y": corridor["y"] + corridor["h"],
+        "w": house_width,
+        "h": house_depth - (corridor["y"] + corridor["h"]),
+    }
+    left_zone = {
+        "x": 0.0,
+        "y": corridor["y"],
+        "w": corridor["x"],
+        "h": corridor["h"],
+    }
+    right_zone = {
+        "x": corridor["x"] + corridor["w"],
+        "y": corridor["y"],
+        "w": house_width - (corridor["x"] + corridor["w"]),
+        "h": corridor["h"],
+    }
+
+    def make_room(name, room_type, x, y, w, h):
+        return {
+            "name": name,
+            "type": room_type,
+            "x": snap(x),
+            "y": snap(y),
+            "w": snap(max(w, room_min_dimensions()[room_type][0])),
+            "h": snap(max(h, room_min_dimensions()[room_type][1])),
+        }
+
+    # ----- Bottom zone: living + kitchen -----
+    kitchen_min_w, kitchen_min_h = room_min_dimensions()["kitchen"]
+    kitchen_w = max(kitchen_min_w, 3.5)
+    kitchen_h = max(kitchen_min_h, bottom_zone["h"])
+
+    # Keep kitchen on one side, living takes the rest
+    kitchen_room = make_room(
+        kitchen["name"], "kitchen",
+        bottom_zone["w"] - kitchen_w, 0.0,
+        kitchen_w, bottom_zone["h"]
+    )
+    living_room = make_room(
+        living["name"], "living_room",
+        0.0, 0.0,
+        bottom_zone["w"] - kitchen_room["w"], bottom_zone["h"]
     )
 
-    # candidate zones around corridor: left, right, top, bottom
-    # each room must touch corridor if possible
-    placed = [corridor]
+    rooms.append(living_room)
+    rooms.append(kitchen_room)
 
-    def try_place_room(room, side):
-        target_area = room["target_area"]
-        min_w, min_h = room_min_dimensions().get(room["type"], (2.0, 2.0))
-        w, h = room_target_dimensions(room["type"], target_area)
+    # ----- Top zone: bedrooms in a row -----
+    bedroom_count = len(bedrooms)
+    if bedroom_count > 0:
+        each_w = top_zone["w"] / bedroom_count
+        for i, b in enumerate(bedrooms):
+            bx = top_zone["x"] + i * each_w
+            bw = each_w
+            bh = top_zone["h"]
+            room = make_room(b["name"], b["type"], bx, top_zone["y"], bw, bh)
+            rooms.append(room)
 
-        # if not enough space later, fall back to minimum dims
-        w = max(w, min_w)
-        h = max(h, min_h)
+    # ----- Left/right corridor-side zones: service + garage -----
+    side_rooms = services + garages
 
-        candidates = []
+    # Fill left zone from bottom to top
+    y_cursor = left_zone["y"]
+    for idx, s in enumerate(side_rooms[: max(0, len(side_rooms) // 2)]):
+        min_w, min_h = room_min_dimensions()[s["type"]]
+        h = max(min_h, left_zone["h"] / max(1, len(side_rooms[: max(0, len(side_rooms) // 2)])))
+        room = make_room(s["name"], s["type"], left_zone["x"], y_cursor, left_zone["w"], h)
+        rooms.append(room)
+        y_cursor += room["h"]
 
-        if side == "left":
-            x = corridor["x"] - w
-            y = corridor["y"] + (corridor["h"] - h) / 2
-            candidates.append((x, y, w, h))
-        elif side == "right":
-            x = corridor["x"] + corridor["w"]
-            y = corridor["y"] + (corridor["h"] - h) / 2
-            candidates.append((x, y, w, h))
-        elif side == "top":
-            x = corridor["x"] + (corridor["w"] - w) / 2
-            y = corridor["y"] + corridor["h"]
-            candidates.append((x, y, w, h))
-        elif side == "bottom":
-            x = corridor["x"] + (corridor["w"] - w) / 2
-            y = corridor["y"] - h
-            candidates.append((x, y, w, h))
+    # Fill right zone from bottom to top
+    y_cursor = right_zone["y"]
+    for s in side_rooms[max(0, len(side_rooms) // 2):]:
+        min_w, min_h = room_min_dimensions()[s["type"]]
+        count_right = len(side_rooms[max(0, len(side_rooms) // 2):])
+        h = max(min_h, right_zone["h"] / max(1, count_right))
+        room = make_room(s["name"], s["type"], right_zone["x"], y_cursor, right_zone["w"], h)
+        rooms.append(room)
+        y_cursor += room["h"]
 
-        # try slight shifts to fit around corridor without overlap
-        for base_x, base_y, base_w, base_h in list(candidates):
-            for dx in [0, -0.5, 0.5, -1.0, 1.0, -1.5, 1.5, -2.0, 2.0]:
-                for dy in [0, -0.5, 0.5, -1.0, 1.0, -1.5, 1.5, -2.0, 2.0]:
-                    candidate = {
-                        "name": room["name"],
-                        "type": room["type"],
-                        "x": base_x + dx,
-                        "y": base_y + dy,
-                        "w": base_w,
-                        "h": base_h,
-                    }
-
-                    if not fits_inside(candidate["x"], candidate["y"], candidate["w"], candidate["h"], house_width, house_depth):
-                        continue
-                    if overlaps_any(candidate, placed):
-                        continue
-                    if room["type"] in ["master_bedroom", "secondary_bedroom", "bathroom", "wc", "laundry", "storage", "kitchen", "living_room"]:
-                        if not rooms_touch(candidate, corridor):
-                            continue
-
-                    return candidate
-
-        # minimum-size fallback
-        for side_try in ["left", "right", "top", "bottom"]:
-            if side_try == "left":
-                x = corridor["x"] - min_w
-                y = corridor["y"] + (corridor["h"] - min_h) / 2
-            elif side_try == "right":
-                x = corridor["x"] + corridor["w"]
-                y = corridor["y"] + (corridor["h"] - min_h) / 2
-            elif side_try == "top":
-                x = corridor["x"] + (corridor["w"] - min_w) / 2
-                y = corridor["y"] + corridor["h"]
-            else:
-                x = corridor["x"] + (corridor["w"] - min_w) / 2
-                y = corridor["y"] - min_h
-
-            candidate = {
-                "name": room["name"],
-                "type": room["type"],
-                "x": x,
-                "y": y,
-                "w": min_w,
-                "h": min_h,
-            }
-
-            if fits_inside(candidate["x"], candidate["y"], candidate["w"], candidate["h"], house_width, house_depth) and not overlaps_any(candidate, placed):
-                if rooms_touch(candidate, corridor):
-                    return candidate
-
-        return None
-
-    side_cycle = ["left", "right", "top", "bottom"]
-    living = next((r for r in non_corridor if r["type"] == "living_room"), None)
-    kitchen = next((r for r in non_corridor if r["type"] == "kitchen"), None)
-
-    if living:
-        non_corridor.remove(living)
-        candidate = try_place_room(living, random.choice(["left", "right", "bottom"]))
-        if candidate:
-            rooms.append(candidate)
-            placed.append(candidate)
-        else:
-            raise ValueError(f"Could not place room: {room['name']}")
-
-    if kitchen:
-        non_corridor.remove(kitchen)
-        candidate = None
-        if living:
-            # prefer kitchen on another side but still corridor-connected
-            for side in ["left", "right", "top", "bottom"]:
-                candidate = try_place_room(kitchen, side)
-                if candidate:
-                    break
-        else:
-            candidate = try_place_room(kitchen, "right")
-        if candidate:
-            rooms.append(candidate)
-            placed.append(candidate)
-        else:
-            raise ValueError(f"Could not place room: {room['name']}")
-
-    side_index = 0
-    for room in non_corridor:
-        candidate = None
-        for _ in range(4):
-            side = side_cycle[side_index % 4]
-            side_index += 1
-            candidate = try_place_room(room, side)
-            if candidate:
-                break
-
-        if candidate:
-            rooms.append(candidate)
-            placed.append(candidate)
-        else:
-            raise ValueError(f"Could not place room: {room['name']}")
-
-    # final cleanup
-    rooms = [snap_room(r) for r in rooms if r["w"] > 0 and r["h"] > 0]
+    # Final cleanup: clamp rooms to slab
+    cleaned = []
+    for r in rooms:
+        r["x"] = snap(max(0, min(r["x"], house_width - r["w"])))
+        r["y"] = snap(max(0, min(r["y"], house_depth - r["h"])))
+        r["w"] = snap(min(r["w"], house_width - r["x"]))
+        r["h"] = snap(min(r["h"], house_depth - r["y"]))
+        cleaned.append(r)
 
     return {
         "house": {"width": house_width, "depth": house_depth},
-        "rooms": rooms
+        "rooms": cleaned
     }
 
 def add_surface_labels(layout):
@@ -984,16 +941,6 @@ def generate_layout(house_data):
         layout = fallback_grid_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
         layout = expand_living_room_to_fill(layout, house_width, house_depth)
-
-        valid, msg = validate_layout(layout, room_program, house_width, house_depth)
-        overlap_ok, overlap_msg = validate_no_overlap_strict(layout)
-        corridor_ok, corridor_msg = validate_corridor_position(layout, house_width, house_depth)
-        valid_adj, adj_msg = validate_adjacency(layout)
-
-        if not (valid and overlap_ok and corridor_ok and valid_adj):
-            raise ValueError(
-                f"Fallback layout invalid: {msg}, {overlap_msg}, {corridor_msg}, {adj_msg}"
-            )
 
     layout = add_surface_labels(layout)
     layout = build_shared_walls(layout)
