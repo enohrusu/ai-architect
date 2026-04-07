@@ -678,75 +678,158 @@ def build_shared_walls(layout):
     house_width = layout["house"]["width"]
     house_depth = layout["house"]["depth"]
 
-    edge_map = {}
+    rooms = layout["rooms"]
 
-    for room in layout["rooms"]:
+    # ---------- Collect raw room edges ----------
+    raw_edges = []
+    for room in rooms:
         for side, seg in room_edges(room):
-            edge_map.setdefault(seg, []).append(
-                {
-                    "room_name": room["name"],
-                    "room_type": room["type"],
-                    "side": side,
-                }
-            )
+            x1, y1, x2, y2 = seg
+            raw_edges.append({
+                "room_name": room["name"],
+                "room_type": room["type"],
+                "side": side,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "orientation": segment_orientation(seg),
+            })
 
+    # ---------- Collect split points ----------
+    horizontal_lines = {}
+    vertical_lines = {}
+
+    for e in raw_edges:
+        if e["orientation"] == "horizontal":
+            y = e["y1"]
+            horizontal_lines.setdefault(y, set()).update([e["x1"], e["x2"]])
+        else:
+            x = e["x1"]
+            vertical_lines.setdefault(x, set()).update([e["y1"], e["y2"]])
+
+    # Add overlap split points from collinear edges
+    for e1 in raw_edges:
+        for e2 in raw_edges:
+            if e1 is e2:
+                continue
+            if e1["orientation"] != e2["orientation"]:
+                continue
+
+            if e1["orientation"] == "horizontal" and e1["y1"] == e2["y1"]:
+                y = e1["y1"]
+                a1, a2 = sorted([e1["x1"], e1["x2"]])
+                b1, b2 = sorted([e2["x1"], e2["x2"]])
+                if max(a1, b1) < min(a2, b2):
+                    horizontal_lines[y].update([a1, a2, b1, b2])
+
+            if e1["orientation"] == "vertical" and e1["x1"] == e2["x1"]:
+                x = e1["x1"]
+                a1, a2 = sorted([e1["y1"], e1["y2"]])
+                b1, b2 = sorted([e2["y1"], e2["y2"]])
+                if max(a1, b1) < min(a2, b2):
+                    vertical_lines[x].update([a1, a2, b1, b2])
+
+    # ---------- Split each edge into atomic segments ----------
+    atomic_segments = []
+
+    for e in raw_edges:
+        if e["orientation"] == "horizontal":
+            y = e["y1"]
+            x_start, x_end = sorted([e["x1"], e["x2"]])
+            xs = sorted(horizontal_lines[y])
+
+            for i in range(len(xs) - 1):
+                sx1 = xs[i]
+                sx2 = xs[i + 1]
+                if sx1 >= x_start and sx2 <= x_end and sx2 > sx1:
+                    atomic_segments.append({
+                        "seg": normalize_segment(sx1, y, sx2, y),
+                        "room_name": e["room_name"],
+                        "room_type": e["room_type"],
+                    })
+        else:
+            x = e["x1"]
+            y_start, y_end = sorted([e["y1"], e["y2"]])
+            ys = sorted(vertical_lines[x])
+
+            for i in range(len(ys) - 1):
+                sy1 = ys[i]
+                sy2 = ys[i + 1]
+                if sy1 >= y_start and sy2 <= y_end and sy2 > sy1:
+                    atomic_segments.append({
+                        "seg": normalize_segment(x, sy1, x, sy2),
+                        "room_name": e["room_name"],
+                        "room_type": e["room_type"],
+                    })
+
+    # ---------- Group owners per atomic segment ----------
+    edge_map = {}
+    for a in atomic_segments:
+        edge_map.setdefault(a["seg"], []).append({
+            "room_name": a["room_name"],
+            "room_type": a["room_type"],
+        })
+
+    # ---------- Build final walls ----------
     walls = []
 
     for seg, owners in edge_map.items():
         x1, y1, x2, y2 = seg
         is_exterior, facade = on_outer_perimeter(seg, house_width, house_depth)
 
+        unique_rooms = []
+        seen = set()
+        for o in owners:
+            if o["room_name"] not in seen:
+                seen.add(o["room_name"])
+                unique_rooms.append(o)
+
         if is_exterior:
-            walls.append(
-                {
-                    "id": f"wall_{len(walls)+1}",
-                    "type": "exterior",
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "orientation": segment_orientation(seg),
-                    "length": segment_length(seg),
-                    "thickness": EXTERIOR_WALL_THICKNESS,
-                    "rooms": [o["room_name"] for o in owners],
-                    "facade": facade,
-                    "window_allowed": True,
-                }
-            )
-        elif len(owners) >= 2:
-            walls.append(
-                {
-                    "id": f"wall_{len(walls)+1}",
-                    "type": "interior",
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "orientation": segment_orientation(seg),
-                    "length": segment_length(seg),
-                    "thickness": INTERIOR_WALL_THICKNESS,
-                    "rooms": [o["room_name"] for o in owners[:2]],
-                    "facade": None,
-                    "window_allowed": False,
-                }
-            )
+            walls.append({
+                "id": f"wall_{len(walls)+1}",
+                "type": "exterior",
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "orientation": segment_orientation(seg),
+                "length": segment_length(seg),
+                "thickness": EXTERIOR_WALL_THICKNESS,
+                "rooms": [o["room_name"] for o in unique_rooms],
+                "facade": facade,
+                "window_allowed": True,
+            })
+        elif len(unique_rooms) >= 2:
+            walls.append({
+                "id": f"wall_{len(walls)+1}",
+                "type": "interior",
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "orientation": segment_orientation(seg),
+                "length": segment_length(seg),
+                "thickness": INTERIOR_WALL_THICKNESS,
+                "rooms": [o["room_name"] for o in unique_rooms[:2]],
+                "facade": None,
+                "window_allowed": False,
+            })
         else:
-            walls.append(
-                {
-                    "id": f"wall_{len(walls)+1}",
-                    "type": "interior",
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "orientation": segment_orientation(seg),
-                    "length": segment_length(seg),
-                    "thickness": INTERIOR_WALL_THICKNESS,
-                    "rooms": [o["room_name"] for o in owners],
-                    "facade": None,
-                    "window_allowed": False,
-                }
-            )
+            walls.append({
+                "id": f"wall_{len(walls)+1}",
+                "type": "interior",
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "orientation": segment_orientation(seg),
+                "length": segment_length(seg),
+                "thickness": INTERIOR_WALL_THICKNESS,
+                "rooms": [o["room_name"] for o in unique_rooms],
+                "facade": None,
+                "window_allowed": False,
+            })
 
     return layout | {"walls": walls}
 
