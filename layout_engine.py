@@ -92,18 +92,6 @@ def expand_living_room_to_fill(layout, house_width, house_depth):
         else:
             break
 
-    # expand left
-    while True:
-        candidate = {
-            **living,
-            "x": living["x"] - step,
-            "w": living["w"] + step
-        }
-        if can_expand(candidate):
-            living["x"] -= step
-            living["w"] += step
-        else:
-            break
 
     # expand up
     while True:
@@ -112,19 +100,6 @@ def expand_living_room_to_fill(layout, house_width, house_depth):
             "h": living["h"] + step
         }
         if can_expand(candidate):
-            living["h"] += step
-        else:
-            break
-
-    # expand down
-    while True:
-        candidate = {
-            **living,
-            "y": living["y"] - step,
-            "h": living["h"] + step
-        }
-        if can_expand(candidate):
-            living["y"] -= step
             living["h"] += step
         else:
             break
@@ -501,7 +476,7 @@ def validate_corridor_position(layout, house_width, house_depth):
         return False, "Missing corridor"
 
     # hard size cap
-    if corridor["w"] > 1.5 or corridor["h"] > 3.0:
+    if corridor["w"] >= 1.5 or corridor["h"] >= 3.0:
         return False, "Corridor too large"
 
     cx = corridor["x"] + corridor["w"] / 2
@@ -521,8 +496,8 @@ def fallback_grid_layout(room_program, house_width, house_depth):
     rooms = []
 
     # corridor: hard-limited, central
-    corridor_w = random.choice([1.2, 1.3, 1.4, 1.5])
-    corridor_h = random.choice([2.5, 2.75, 3.0])
+    corridor_w = random.choice([1.2, 1.3, 1.4])
+    corridor_h = random.choice([2.5, 2.75])
 
     corridor_x = (house_width - corridor_w) / 2
     corridor_y = (house_depth - corridor_h) / 2
@@ -645,6 +620,8 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         if candidate:
             rooms.append(candidate)
             placed.append(candidate)
+        else:
+            raise ValueError(f"Could not place room: {room['name']}")
 
     if kitchen:
         non_corridor.remove(kitchen)
@@ -660,6 +637,8 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         if candidate:
             rooms.append(candidate)
             placed.append(candidate)
+        else:
+            raise ValueError(f"Could not place room: {room['name']}")
 
     side_index = 0
     for room in non_corridor:
@@ -674,6 +653,8 @@ def fallback_grid_layout(room_program, house_width, house_depth):
         if candidate:
             rooms.append(candidate)
             placed.append(candidate)
+        else:
+            raise ValueError(f"Could not place room: {room['name']}")
 
     # final cleanup
     rooms = [snap_room(r) for r in rooms if r["w"] > 0 and r["h"] > 0]
@@ -930,6 +911,16 @@ def build_circulation_plan(layout):
             "rooms": wall["rooms"],
             "width": 0.9
         })
+        unique = []
+    seen = set()
+
+    for door in circulation["doors"]:
+        key = (door["wall_id"], tuple(sorted(door["rooms"])), door["type"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(door)
+
+    circulation["doors"] = unique
 
     return layout | {"circulation": circulation}
 
@@ -945,6 +936,10 @@ def add_metadata(layout):
     }
     return layout
 
+def has_all_required_rooms(layout, room_program):
+    actual_names = sorted(r["name"] for r in layout.get("rooms", []))
+    expected_names = sorted(r["name"] for r in room_program)
+    return actual_names == expected_names
 
 def generate_layout(house_data):
     total_area = float(house_data.get("area_m2", 120))
@@ -967,6 +962,9 @@ def generate_layout(house_data):
             candidate["rooms"] = ensure_minimums(candidate["rooms"])
             candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
 
+            if not has_all_required_rooms(candidate, room_program):
+                continue
+
             valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
 
             if valid:
@@ -986,6 +984,16 @@ def generate_layout(house_data):
         layout = fallback_grid_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
         layout = expand_living_room_to_fill(layout, house_width, house_depth)
+
+        valid, msg = validate_layout(layout, room_program, house_width, house_depth)
+        overlap_ok, overlap_msg = validate_no_overlap_strict(layout)
+        corridor_ok, corridor_msg = validate_corridor_position(layout, house_width, house_depth)
+        valid_adj, adj_msg = validate_adjacency(layout)
+
+        if not (valid and overlap_ok and corridor_ok and valid_adj):
+            raise ValueError(
+                f"Fallback layout invalid: {msg}, {overlap_msg}, {corridor_msg}, {adj_msg}"
+            )
 
     layout = add_surface_labels(layout)
     layout = build_shared_walls(layout)

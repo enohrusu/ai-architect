@@ -222,11 +222,16 @@ def add_garage_door_spec(name, x, y, rot_z=0):
         "depth": 0.5
     })
 
-def create_door_visual(name, x, y, rot_z=0):
+def create_door_visual(name, x, y, rot_z=0, width=None, height=None):
+    if width is None:
+        width = DOOR_WIDTH
+    if height is None:
+        height = DOOR_HEIGHT
+
     door = create_box(
         name=name,
-        location=(x, y, DOOR_HEIGHT / 2),
-        scale=(0.06, DOOR_WIDTH / 2, DOOR_HEIGHT / 2),
+        location=(x, y, height / 2),
+        scale=(0.06, width / 2, height / 2),
         material=door_material
     )
     door.rotation_euler[2] = math.radians(rot_z)
@@ -399,11 +404,9 @@ for door in door_plan:
     door_specs.append(spec)
 
     if door["type"] == "front":
-        create_door_visual("Door_front", dx, dy, rot)
-    elif "garage" in door.get("rooms", []):
-        create_garage_door_visual(f"Door_{door['wall_id']}", dx, dy, rot)
+        create_door_visual("Door_front", dx, dy, rot, width=door_width, height=DOOR_HEIGHT)
     else:
-        create_door_visual(f"Door_{door['wall_id']}", dx, dy, rot)
+        create_door_visual(f"Door_{door['wall_id']}", dx, dy, rot, width=door_width, height=DOOR_HEIGHT)
 
     local_pos = get_wall_span_position(wall_data, dx, dy)
     reserve_span(wall_data["id"], local_pos, door_width / 2)
