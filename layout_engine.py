@@ -177,20 +177,16 @@ def room_name(room_type, index, all_rooms):
 
 
 def estimate_house_rectangles(total_area):
-    candidates = []
+    width = math.sqrt(total_area * 1.18)
+    depth = total_area / max(width, 1)
 
-    for width in [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15]:
-        depth = total_area / width
-        depth = snap(depth)
+    width = snap(width)
+    depth = snap(depth)
 
-        if depth < 8 or depth > 16:
-            continue
+    if width < depth:
+        width, depth = depth, width
 
-        candidates.append((snap(width), snap(depth)))
-
-    # prefer more compact rectangles first
-    candidates.sort(key=lambda wh: abs(wh[0] - wh[1]))
-    return candidates
+    return [(width, depth)]
 
 
 def build_room_program(house_data):
@@ -1208,101 +1204,41 @@ def generate_layout(house_data):
     slab_candidates = estimate_house_rectangles(total_area)
     room_program = build_room_program(house_data)
 
+    # choose just one slab option
+    house_width, house_depth = slab_candidates[0]
+
     layout = None
 
-    for house_width, house_depth in slab_candidates:
-        for _ in range(5):
-            try:
-                candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
+    # try OpenAI once
+    try:
+        candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
 
-                if "house" not in candidate:
-                    candidate["house"] = {}
+        if "house" not in candidate:
+            candidate["house"] = {}
 
-                candidate["house"]["width"] = house_width
-                candidate["house"]["depth"] = house_depth
+        candidate["house"]["width"] = house_width
+        candidate["house"]["depth"] = house_depth
 
-                candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
-                candidate["rooms"] = ensure_minimums(candidate["rooms"])
-                candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
+        candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
+        candidate["rooms"] = ensure_minimums(candidate["rooms"])
+        candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
 
-                if not has_all_required_rooms(candidate, room_program):
-                    continue
+        if has_all_required_rooms(candidate, room_program):
+            layout = candidate
 
-                valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
+    except Exception as e:
+        print("AI layout failed, using fallback:", str(e))
 
-                if valid:
-                    valid_adj, adj_msg = validate_adjacency(candidate)
-                    corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
-                    area_ok, area_msg = validate_total_area_usage(candidate, total_area)
-                    overlap_ok, overlap_msg = validate_no_overlap_strict(candidate)
-                    required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(candidate)
-
-                    candidate = add_surface_labels(candidate)
-                    candidate = build_shared_walls(candidate)
-                    candidate = build_circulation_plan(candidate)
-
-                    circle_ok, circle_msg = validate_circle_circulation(candidate)
-
-                    if (
-                        valid_adj
-                        and corridor_ok
-                        and area_ok
-                        and overlap_ok
-                        and required_corridor_ok
-                        and circle_ok
-                    ):
-                        layout = candidate
-                        break
-
-            except Exception:
-                pass
-
-        if layout is not None:
-            break
-
+    # fallback once if AI layout failed
     if layout is None:
-        # use the most compact slab candidate first
-        house_width, house_depth = slab_candidates[0]
-
         layout = fallback_grid_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
         layout = expand_living_room_to_fill(layout, house_width, house_depth)
 
-        if not has_all_required_rooms(layout, room_program):
-            raise ValueError("Fallback layout is missing required rooms")
-
-        valid, msg = validate_layout(layout, room_program, house_width, house_depth)
-        valid_adj, adj_msg = validate_adjacency(layout)
-        corridor_ok, corridor_msg = validate_corridor_position(layout, house_width, house_depth)
-        area_ok, area_msg = validate_total_area_usage(layout, total_area)
-        overlap_ok, overlap_msg = validate_no_overlap_strict(layout)
-        required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(layout)
-
-        layout = add_surface_labels(layout)
-        layout = build_shared_walls(layout)
-        layout = build_circulation_plan(layout)
-
-        circle_ok, circle_msg = validate_circle_circulation(layout)
-
-        if not (
-            valid
-            and valid_adj
-            and corridor_ok
-            and area_ok
-            and overlap_ok
-            and required_corridor_ok
-            and circle_ok
-        ):
-            print(
-                "Fallback layout invalid:",
-                msg,
-                adj_msg,
-                corridor_msg,
-                area_msg,
-                overlap_msg,
-                required_corridor_msg,
-                circle_msg,
-            )
-
+    # build derived data once
+    layout = add_surface_labels(layout)
+    layout = build_shared_walls(layout)
+    layout = build_circulation_plan(layout)
     layout = add_metadata(layout)
+
     return layout
