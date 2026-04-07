@@ -62,6 +62,11 @@ def room_has_min_dimensions(room):
     min_w, min_h = mins.get(room["type"], (1.0, 1.0))
     return room["w"] >= min_w and room["h"] >= min_h
 
+def room_has_min_area(room):
+    rules = room_rules()
+    min_area = rules.get(room["type"], {}).get("min", 0)
+    return room["w"] * room["h"] >= min_area
+
 
 def room_rules():
     return {
@@ -440,6 +445,9 @@ def validate_layout(layout, room_program, house_width, house_depth):
 
     rooms = layout["rooms"]
 
+    if not room_has_min_area(room):
+        return False, f"Room below minimum area: {room['name']}"
+
     if len(rooms) != len(room_program):
         return False, "Wrong number of rooms"
 
@@ -483,7 +491,7 @@ def validate_corridor_position(layout, house_width, house_depth):
         return False, "Missing corridor"
 
     # hard size cap
-    if corridor["w"] >= 1.5 or corridor["h"] >= 3.0:
+    if corridor["w"] > 1.5 or corridor["h"] > 3.0:
         return False, "Corridor too large"
 
     cx = corridor["x"] + corridor["w"] / 2
@@ -974,6 +982,7 @@ def validate_required_corridor_contacts(layout):
         "wc",
         "laundry",
         "storage",
+        "garage",
     }
 
     for room in rooms:
@@ -1206,6 +1215,96 @@ def has_all_required_rooms(layout, room_program):
     expected_names = sorted(r["name"] for r in room_program)
     return actual_names == expected_names
 
+def fallback_corridor_compact_layout(room_program, house_width, house_depth):
+    rooms = []
+
+    corridor = {
+        "name": "corridor",
+        "type": "corridor",
+        "x": snap((house_width - 1.5) / 2),
+        "y": snap((house_depth - 2.5) / 2),
+        "w": 1.5,
+        "h": 2.5,
+    }
+    rooms.append(corridor)
+
+    def make_room(name, room_type, x, y, w, h):
+        min_w, min_h = room_min_dimensions()[room_type]
+        return {
+            "name": name,
+            "type": room_type,
+            "x": snap(x),
+            "y": snap(y),
+            "w": snap(max(w, min_w)),
+            "h": snap(max(h, min_h)),
+        }
+
+    living = next(r for r in room_program if r["type"] == "living_room")
+    kitchen = next(r for r in room_program if r["type"] == "kitchen")
+    bedrooms = [r for r in room_program if r["type"] in ["master_bedroom", "secondary_bedroom"]]
+    services = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
+    garage = next((r for r in room_program if r["type"] == "garage"), None)
+
+    # South: living + kitchen
+    south_h = corridor["y"]
+    kitchen_w = 3.5
+    living_w = house_width - kitchen_w
+
+    rooms.append(make_room(living["name"], "living_room", 0, 0, living_w, south_h))
+    rooms.append(make_room(kitchen["name"], "kitchen", living_w, 0, kitchen_w, south_h))
+
+    # West corridor side: bathroom + wc
+    west_x = 0
+    west_w = corridor["x"]
+    west_y = corridor["y"]
+
+    west_services = [r for r in services if r["type"] in ["bathroom", "wc"]]
+    y_cursor = west_y
+    for r in west_services:
+        min_w, min_h = room_min_dimensions()[r["type"]]
+        rooms.append(make_room(r["name"], r["type"], west_x, y_cursor, west_w, min_h))
+        y_cursor += snap(min_h)
+
+    # East corridor side: laundry + storage
+    east_x = corridor["x"] + corridor["w"]
+    east_w = house_width - east_x
+
+    east_services = [r for r in services if r["type"] in ["laundry", "storage"]]
+    y_cursor = corridor["y"]
+    for r in east_services:
+        min_w, min_h = room_min_dimensions()[r["type"]]
+        rooms.append(make_room(r["name"], r["type"], east_x, y_cursor, east_w, min_h))
+        y_cursor += snap(min_h)
+
+    # North: bedrooms across full width, all touching corridor
+    north_y = corridor["y"] + corridor["h"]
+    north_h = house_depth - north_y
+
+    if bedrooms:
+        bw = house_width / len(bedrooms)
+        for i, b in enumerate(bedrooms):
+            rooms.append(make_room(b["name"], b["type"], i * bw, north_y, bw, north_h))
+
+    # Garage: east side, directly below/above east service strip and touching circulation side
+    if garage:
+        garage_w = max(room_min_dimensions()["garage"][0], east_w)
+        garage_h = max(room_min_dimensions()["garage"][1], house_depth - (corridor["y"] + corridor["h"] + 0.5))
+        rooms.append(
+            make_room(
+                garage["name"],
+                "garage",
+                east_x,
+                max(north_y, y_cursor),
+                east_w,
+                house_depth - max(north_y, y_cursor),
+            )
+        )
+
+    return {
+        "house": {"width": house_width, "depth": house_depth},
+        "rooms": rooms
+    }
+
 def generate_layout(house_data):
     total_area = float(house_data.get("area_m2", 120))
     slab_candidates = estimate_house_rectangles(total_area)
@@ -1231,7 +1330,27 @@ def generate_layout(house_data):
             layout = candidate
 
     except Exception as e:
-        print("AI layout failed, using fallback:", str(e))
+        valid, msg = validate_layout(layout, room_program, house_width, house_depth)
+        valid_adj, adj_msg = validate_adjacency(layout)
+        corridor_ok, corridor_msg = validate_corridor_position(layout, house_width, house_depth)
+        area_ok, area_msg = validate_total_area_usage(layout, total_area)
+        overlap_ok, overlap_msg = validate_no_overlap_strict(layout)
+        required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(layout)
+
+        layout = add_surface_labels(layout)
+        layout = build_shared_walls(layout)
+        layout = build_circulation_plan(layout)
+
+        circle_ok, circle_msg = validate_circle_circulation(layout)
+
+        if not (valid and valid_adj and corridor_ok and area_ok and overlap_ok and required_corridor_ok and circle_ok):
+            layout = fallback_corridor_compact_layout(room_program, house_width, house_depth)
+            layout["rooms"] = ensure_minimums(layout["rooms"])
+            layout = resolve_overlaps(layout, house_width, house_depth)
+            layout = add_surface_labels(layout)
+            layout = build_shared_walls(layout)
+            layout = build_circulation_plan(layout)
+            circle_ok, circle_msg = validate_circle_circulation(layout)
 
     if layout is None:
         layout = fallback_grid_layout(room_program, house_width, house_depth)
