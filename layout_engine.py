@@ -63,49 +63,6 @@ def room_has_min_dimensions(room):
     return room["w"] >= min_w and room["h"] >= min_h
 
 
-def expand_living_room_to_fill(layout, house_width, house_depth):
-    rooms = layout["rooms"]
-    living = next((r for r in rooms if r["type"] == "living_room"), None)
-
-    if not living:
-        return layout
-
-    def can_expand(new_room):
-        for r in rooms:
-            if r["name"] == living["name"]:
-                continue
-            if rectangles_overlap(new_room, r):
-                return False
-        return fits_inside(new_room["x"], new_room["y"], new_room["w"], new_room["h"], house_width, house_depth)
-
-    # try expanding in 4 directions step-by-step
-    step = 0.5
-
-    # expand right
-    while True:
-        candidate = {
-            **living,
-            "w": living["w"] + step
-        }
-        if can_expand(candidate):
-            living["w"] += step
-        else:
-            break
-
-
-    # expand up
-    while True:
-        candidate = {
-            **living,
-            "h": living["h"] + step
-        }
-        if can_expand(candidate):
-            living["h"] += step
-        else:
-            break
-
-    return layout
-
 def room_rules():
     return {
         "living_room": {"min": 20, "ideal_min": 25, "ideal_max": 35, "max": 999},
@@ -402,6 +359,56 @@ def rectangles_overlap(a, b):
         or b["y"] + b["h"] <= a["y"]
     )
 
+def resolve_overlaps(layout, house_width, house_depth, max_passes=20):
+    rooms = layout["rooms"]
+
+    for _ in range(max_passes):
+        changed = False
+
+        for i in range(len(rooms)):
+            for j in range(i + 1, len(rooms)):
+                a = rooms[i]
+                b = rooms[j]
+
+                if not rectangles_overlap(a, b):
+                    continue
+
+                changed = True
+
+                overlap_x = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+                overlap_y = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+
+                if overlap_x <= 0 or overlap_y <= 0:
+                    continue
+
+                # Prefer moving the room that is not corridor/living room
+                movable = b
+                anchor = a
+
+                if a["type"] not in ["corridor", "living_room"] and b["type"] in ["corridor", "living_room"]:
+                    movable = a
+                    anchor = b
+
+                # Shift in the smallest-overlap direction
+                if overlap_x < overlap_y:
+                    if movable["x"] >= anchor["x"]:
+                        movable["x"] = snap(movable["x"] + overlap_x)
+                    else:
+                        movable["x"] = snap(movable["x"] - overlap_x)
+                else:
+                    if movable["y"] >= anchor["y"]:
+                        movable["y"] = snap(movable["y"] + overlap_y)
+                    else:
+                        movable["y"] = snap(movable["y"] - overlap_y)
+
+                # Clamp back inside slab
+                movable["x"] = snap(max(0, min(movable["x"], house_width - movable["w"])))
+                movable["y"] = snap(max(0, min(movable["y"], house_depth - movable["h"])))
+
+        if not changed:
+            break
+
+    return layout
 
 def ensure_minimums(rooms):
     rules = room_rules()
@@ -1204,12 +1211,9 @@ def generate_layout(house_data):
     slab_candidates = estimate_house_rectangles(total_area)
     room_program = build_room_program(house_data)
 
-    # choose just one slab option
     house_width, house_depth = slab_candidates[0]
-
     layout = None
 
-    # try OpenAI once
     try:
         candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
 
@@ -1221,7 +1225,7 @@ def generate_layout(house_data):
 
         candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
         candidate["rooms"] = ensure_minimums(candidate["rooms"])
-        candidate = expand_living_room_to_fill(candidate, house_width, house_depth)
+        candidate = resolve_overlaps(candidate, house_width, house_depth)
 
         if has_all_required_rooms(candidate, room_program):
             layout = candidate
@@ -1229,16 +1233,21 @@ def generate_layout(house_data):
     except Exception as e:
         print("AI layout failed, using fallback:", str(e))
 
-    # fallback once if AI layout failed
     if layout is None:
         layout = fallback_grid_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
-        layout = expand_living_room_to_fill(layout, house_width, house_depth)
+        layout = resolve_overlaps(layout, house_width, house_depth)
 
-    # build derived data once
     layout = add_surface_labels(layout)
     layout = build_shared_walls(layout)
     layout = build_circulation_plan(layout)
-    layout = add_metadata(layout)
 
+    circle_ok, circle_msg = validate_circle_circulation(layout)
+    layout["circulation_check"] = {
+        "circle_diameter_m": 0.6,
+        "success": circle_ok,
+        "message": circle_msg
+    }
+
+    layout = add_metadata(layout)
     return layout
