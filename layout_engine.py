@@ -93,20 +93,21 @@ def rooms_touch(a, b):
 
 def validate_adjacency(layout):
     rooms = layout["rooms"]
+    corridor = next((r for r in rooms if r["type"] == "corridor"), None)
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [corridor] if corridor else [])
 
     living = next((r for r in rooms if r["type"] == "living_room"), None)
     kitchen = next((r for r in rooms if r["type"] == "kitchen"), None)
-    corridor = next((r for r in rooms if r["type"] == "corridor"), None)
     bedrooms = [r for r in rooms if r["type"] in ["master_bedroom", "secondary_bedroom"]]
 
     if living and kitchen and not rooms_touch(living, kitchen):
         return False, "Living room must touch kitchen"
 
-    if living and corridor and not rooms_touch(living, corridor):
+    if living and not room_touches_any_corridor_part(living, corridor_parts):
         return False, "Living room must touch corridor"
 
     for bedroom in bedrooms:
-        if not corridor or not rooms_touch(bedroom, corridor):
+        if not room_touches_any_corridor_part(bedroom, corridor_parts):
             return False, f"{bedroom['name']} must touch corridor"
 
     return True, "OK"
@@ -502,11 +503,15 @@ def validate_corridor_position(layout, house_width, house_depth):
     if not corridor:
         return False, "Missing corridor"
 
-    if corridor["w"] > 1.5 or corridor["h"] > 3.0:
-        return False, "Corridor too large"
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [corridor])
 
-    cx = corridor["x"] + corridor["w"] / 2
-    cy = corridor["y"] + corridor["h"] / 2
+    min_x = min(p["x"] for p in corridor_parts)
+    min_y = min(p["y"] for p in corridor_parts)
+    max_x = max(p["x"] + p["w"] for p in corridor_parts)
+    max_y = max(p["y"] + p["h"] for p in corridor_parts)
+
+    cx = (min_x + max_x) / 2
+    cy = (min_y + max_y) / 2
 
     house_cx = house_width / 2
     house_cy = house_depth / 2
@@ -515,6 +520,12 @@ def validate_corridor_position(layout, house_width, house_depth):
         return False, "Corridor not central enough"
     if abs(cy - house_cy) > house_depth * 0.2:
         return False, "Corridor not central enough"
+
+    # each branch thickness must stay compact
+    for part in corridor_parts:
+        short_side = min(part["w"], part["h"])
+        if short_side > 1.5:
+            return False, "Corridor branch too wide"
 
     return True, "OK"
 
@@ -1344,31 +1355,36 @@ def validate_full_slab_coverage(layout, house_width, house_depth, tolerance=0.5)
 def fallback_corridor_compact_layout(room_program, house_width, house_depth):
     rooms = []
 
-    # ----- T corridor geometry -----
     spine_w = 1.5
     spine_h = 3.0
-    top_bar_w = 6.0
-    top_bar_h = 1.5
+    bar_w = 6.0
+    bar_h = 1.5
 
     spine_x = snap((house_width - spine_w) / 2)
-    spine_y = snap((house_depth - spine_h) / 2)
-
-    top_bar_x = snap((house_width - top_bar_w) / 2)
-    top_bar_y = snap(spine_y + spine_h - top_bar_h)
+    spine_y = snap((house_depth - spine_h - bar_h) / 2)
 
     corridor_parts = [
-        {"x": spine_x, "y": spine_y, "w": spine_w, "h": spine_h},
-        {"x": top_bar_x, "y": top_bar_y, "w": top_bar_w, "h": top_bar_h},
+        {
+            "x": spine_x,
+            "y": spine_y,
+            "w": spine_w,
+            "h": spine_h,
+        },
+        {
+            "x": snap((house_width - bar_w) / 2),
+            "y": snap(spine_y + spine_h),
+            "w": bar_w,
+            "h": bar_h,
+        },
     ]
 
-    # Bounding box room kept for compatibility
     corridor = {
         "name": "corridor",
         "type": "corridor",
-        "x": min(p["x"] for p in corridor_parts),
-        "y": min(p["y"] for p in corridor_parts),
-        "w": max(p["x"] + p["w"] for p in corridor_parts) - min(p["x"] for p in corridor_parts),
-        "h": max(p["y"] + p["h"] for p in corridor_parts) - min(p["y"] for p in corridor_parts),
+        "x": spine_x,
+        "y": spine_y,
+        "w": spine_w,
+        "h": spine_h,
     }
     rooms.append(corridor)
 
@@ -1389,7 +1405,6 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
     services = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
     garage = next((r for r in room_program if r["type"] == "garage"), None)
 
-    # South/day band
     south_h = spine_y
     kitchen_w = 3.5
     living_w = house_width - kitchen_w
@@ -1397,19 +1412,18 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
     rooms.append(make_room(living["name"], "living_room", 0, 0, living_w, south_h))
     rooms.append(make_room(kitchen["name"], "kitchen", living_w, 0, kitchen_w, south_h))
 
-    # North bedrooms across full width above T
-    north_y = top_bar_y + top_bar_h
+    north_y = corridor_parts[1]["y"] + corridor_parts[1]["h"]
     north_h = house_depth - north_y
+
     if bedrooms:
         bw = house_width / len(bedrooms)
         for i, b in enumerate(bedrooms):
             rooms.append(make_room(b["name"], b["type"], i * bw, north_y, bw, north_h))
 
-    # West of T bar: bathroom + wc
     west_rooms = [r for r in services if r["type"] in ["bathroom", "wc"]]
     west_x = 0
-    west_y = top_bar_y
-    west_w = top_bar_x
+    west_y = corridor_parts[1]["y"]
+    west_w = corridor_parts[1]["x"]
 
     y_cursor = west_y
     for r in west_rooms:
@@ -1417,10 +1431,9 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
         rooms.append(make_room(r["name"], r["type"], west_x, y_cursor, west_w, min_h))
         y_cursor += snap(min_h)
 
-    # East of T bar: laundry + storage
     east_rooms = [r for r in services if r["type"] in ["laundry", "storage"]]
-    east_x = top_bar_x + top_bar_w
-    east_y = top_bar_y
+    east_x = corridor_parts[1]["x"] + corridor_parts[1]["w"]
+    east_y = corridor_parts[1]["y"]
     east_w = house_width - east_x
 
     y_cursor = east_y
@@ -1429,7 +1442,6 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
         rooms.append(make_room(r["name"], r["type"], east_x, y_cursor, east_w, min_h))
         y_cursor += snap(min_h)
 
-    # Garage under east services or east side lower band
     if garage:
         garage_y = max(spine_y, y_cursor)
         rooms.append(
@@ -1439,7 +1451,7 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
                 east_x,
                 garage_y,
                 east_w,
-                house_depth - garage_y if garage_y > north_y else north_y - garage_y,
+                house_depth - garage_y,
             )
         )
 
@@ -1537,6 +1549,38 @@ def generate_layout(house_data):
         candidate["rooms"] = ensure_minimums(candidate["rooms"])
         candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
         candidate = resolve_overlaps(candidate, house_width, house_depth)
+
+        if "corridor_geometry" not in candidate:
+            corridor_room = next((r for r in candidate["rooms"] if r["type"] == "corridor"), None)
+            if corridor_room:
+                cx = corridor_room["x"] + corridor_room["w"] / 2
+                cy = corridor_room["y"] + corridor_room["h"] / 2
+
+                spine_w = min(1.5, corridor_room["w"])
+                spine_h = min(3.0, max(2.5, corridor_room["h"]))
+                bar_w = min(6.0, house_width * 0.45)
+                bar_h = 1.5
+
+                spine_x = snap(cx - spine_w / 2)
+                spine_y = snap(cy - spine_h / 2)
+
+                candidate["corridor_geometry"] = {
+                    "shape": "T",
+                    "parts": [
+                        {
+                            "x": spine_x,
+                            "y": spine_y,
+                            "w": spine_w,
+                            "h": spine_h,
+                        },
+                        {
+                            "x": snap(cx - bar_w / 2),
+                            "y": snap(spine_y + spine_h),
+                            "w": snap(bar_w),
+                            "h": bar_h,
+                        }
+                    ]
+                }
 
         if has_all_required_rooms(candidate, room_program):
             valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
