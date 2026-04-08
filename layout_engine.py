@@ -694,15 +694,45 @@ def build_shared_walls(layout):
     house_depth = layout["house"]["depth"]
 
     rooms = layout["rooms"]
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [])
 
     # ---------- Collect raw room edges ----------
     raw_edges = []
+
+    # Normal rooms except corridor bounding box
     for room in rooms:
+        if room["type"] == "corridor":
+            continue
+
         for side, seg in room_edges(room):
             x1, y1, x2, y2 = seg
             raw_edges.append({
                 "room_name": room["name"],
                 "room_type": room["type"],
+                "side": side,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "orientation": segment_orientation(seg),
+            })
+
+    # Corridor parts as pseudo-rooms
+    for idx, part in enumerate(corridor_parts):
+        corridor_part = {
+            "name": f"corridor_part_{idx+1}",
+            "type": "corridor",
+            "x": part["x"],
+            "y": part["y"],
+            "w": part["w"],
+            "h": part["h"],
+        }
+
+        for side, seg in room_edges(corridor_part):
+            x1, y1, x2, y2 = seg
+            raw_edges.append({
+                "room_name": "corridor",
+                "room_type": "corridor",
                 "side": side,
                 "x1": x1,
                 "y1": y1,
@@ -723,7 +753,6 @@ def build_shared_walls(layout):
             x = e["x1"]
             vertical_lines.setdefault(x, set()).update([e["y1"], e["y2"]])
 
-    # Add overlap split points from collinear edges
     for e1 in raw_edges:
         for e2 in raw_edges:
             if e1 is e2:
@@ -745,7 +774,7 @@ def build_shared_walls(layout):
                 if max(a1, b1) < min(a2, b2):
                     vertical_lines[x].update([a1, a2, b1, b2])
 
-    # ---------- Split each edge into atomic segments ----------
+    # ---------- Split into atomic segments ----------
     atomic_segments = []
 
     for e in raw_edges:
@@ -778,7 +807,7 @@ def build_shared_walls(layout):
                         "room_type": e["room_type"],
                     })
 
-    # ---------- Group owners per atomic segment ----------
+    # ---------- Group owners ----------
     edge_map = {}
     for a in atomic_segments:
         edge_map.setdefault(a["seg"], []).append({
@@ -979,11 +1008,20 @@ def build_circulation_plan(layout):
 
     return layout | {"circulation": circulation}
 
+def room_touches_any_corridor_part(room, corridor_parts):
+    for part in corridor_parts:
+        if rooms_touch(room, part):
+            return True
+    return False
+
+
 def validate_required_corridor_contacts(layout):
     rooms = layout["rooms"]
     corridor = next((r for r in rooms if r["type"] == "corridor"), None)
     if not corridor:
         return False, "Missing corridor"
+
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [corridor])
 
     required_types = {
         "master_bedroom",
@@ -992,12 +1030,12 @@ def validate_required_corridor_contacts(layout):
         "wc",
         "laundry",
         "storage",
-        "garage", v
+        "garage",
     }
 
     for room in rooms:
         if room["type"] in required_types:
-            if not rooms_touch(room, corridor):
+            if not room_touches_any_corridor_part(room, corridor_parts):
                 return False, f"{room['name']} must touch corridor"
 
     return True, "OK"
@@ -1126,6 +1164,7 @@ def carve_doors_from_blocked(blocked, layout):
 def build_walkable_cells(layout):
     house = layout["house"]
     rooms = layout["rooms"]
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [])
 
     walkable = set()
 
@@ -1139,17 +1178,28 @@ def build_walkable_cells(layout):
             if x < 0 or y < 0 or x > house["width"] or y > house["depth"]:
                 continue
 
+            inside = False
+
             for room in rooms:
+                if room["type"] == "corridor":
+                    continue
                 if point_in_room(x, y, room):
-                    walkable.add((i, j))
+                    inside = True
                     break
+
+            if not inside:
+                for part in corridor_parts:
+                    if point_in_room(x, y, part):
+                        inside = True
+                        break
+
+            if inside:
+                walkable.add((i, j))
 
     blocked = build_blocked_cells(layout)
     blocked = carve_doors_from_blocked(blocked, layout)
 
     return walkable - blocked
-
-from collections import deque
 
 
 def bfs_path_exists(walkable, start, goal):
@@ -1209,6 +1259,7 @@ def add_metadata(layout):
         "max_width_m": 1.5,
         "max_length_m": 3.0,
         "must_be_central": True,
+        "allowed_shapes": ["straight", "L", "T"],
         "required_room_types_touching_corridor": [
             "master_bedroom",
             "secondary_bedroom",
@@ -1245,13 +1296,31 @@ def validate_full_slab_coverage(layout, house_width, house_depth, tolerance=0.5)
 def fallback_corridor_compact_layout(room_program, house_width, house_depth):
     rooms = []
 
+    # ----- T corridor geometry -----
+    spine_w = 1.5
+    spine_h = 3.0
+    top_bar_w = 6.0
+    top_bar_h = 1.5
+
+    spine_x = snap((house_width - spine_w) / 2)
+    spine_y = snap((house_depth - spine_h) / 2)
+
+    top_bar_x = snap((house_width - top_bar_w) / 2)
+    top_bar_y = snap(spine_y + spine_h - top_bar_h)
+
+    corridor_parts = [
+        {"x": spine_x, "y": spine_y, "w": spine_w, "h": spine_h},
+        {"x": top_bar_x, "y": top_bar_y, "w": top_bar_w, "h": top_bar_h},
+    ]
+
+    # Bounding box room kept for compatibility
     corridor = {
         "name": "corridor",
         "type": "corridor",
-        "x": snap((house_width - 1.5) / 2),
-        "y": snap((house_depth - 2.5) / 2),
-        "w": 1.5,
-        "h": 2.5,
+        "x": min(p["x"] for p in corridor_parts),
+        "y": min(p["y"] for p in corridor_parts),
+        "w": max(p["x"] + p["w"] for p in corridor_parts) - min(p["x"] for p in corridor_parts),
+        "h": max(p["y"] + p["h"] for p in corridor_parts) - min(p["y"] for p in corridor_parts),
     }
     rooms.append(corridor)
 
@@ -1272,44 +1341,49 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
     services = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage"]]
     garage = next((r for r in room_program if r["type"] == "garage"), None)
 
-    south_h = corridor["y"]
+    # South/day band
+    south_h = spine_y
     kitchen_w = 3.5
     living_w = house_width - kitchen_w
 
     rooms.append(make_room(living["name"], "living_room", 0, 0, living_w, south_h))
     rooms.append(make_room(kitchen["name"], "kitchen", living_w, 0, kitchen_w, south_h))
 
-    west_x = 0
-    west_w = corridor["x"]
-    west_y = corridor["y"]
-
-    west_services = [r for r in services if r["type"] in ["bathroom", "wc"]]
-    y_cursor = west_y
-    for r in west_services:
-        min_w, min_h = room_min_dimensions()[r["type"]]
-        rooms.append(make_room(r["name"], r["type"], west_x, y_cursor, west_w, min_h))
-        y_cursor += snap(min_h)
-
-    east_x = corridor["x"] + corridor["w"]
-    east_w = house_width - east_x
-
-    east_services = [r for r in services if r["type"] in ["laundry", "storage"]]
-    y_cursor = corridor["y"]
-    for r in east_services:
-        min_w, min_h = room_min_dimensions()[r["type"]]
-        rooms.append(make_room(r["name"], r["type"], east_x, y_cursor, east_w, min_h))
-        y_cursor += snap(min_h)
-
-    north_y = corridor["y"] + corridor["h"]
+    # North bedrooms across full width above T
+    north_y = top_bar_y + top_bar_h
     north_h = house_depth - north_y
-
     if bedrooms:
         bw = house_width / len(bedrooms)
         for i, b in enumerate(bedrooms):
             rooms.append(make_room(b["name"], b["type"], i * bw, north_y, bw, north_h))
 
+    # West of T bar: bathroom + wc
+    west_rooms = [r for r in services if r["type"] in ["bathroom", "wc"]]
+    west_x = 0
+    west_y = top_bar_y
+    west_w = top_bar_x
+
+    y_cursor = west_y
+    for r in west_rooms:
+        min_w, min_h = room_min_dimensions()[r["type"]]
+        rooms.append(make_room(r["name"], r["type"], west_x, y_cursor, west_w, min_h))
+        y_cursor += snap(min_h)
+
+    # East of T bar: laundry + storage
+    east_rooms = [r for r in services if r["type"] in ["laundry", "storage"]]
+    east_x = top_bar_x + top_bar_w
+    east_y = top_bar_y
+    east_w = house_width - east_x
+
+    y_cursor = east_y
+    for r in east_rooms:
+        min_w, min_h = room_min_dimensions()[r["type"]]
+        rooms.append(make_room(r["name"], r["type"], east_x, y_cursor, east_w, min_h))
+        y_cursor += snap(min_h)
+
+    # Garage under east services or east side lower band
     if garage:
-        garage_y = max(north_y, y_cursor)
+        garage_y = max(spine_y, y_cursor)
         rooms.append(
             make_room(
                 garage["name"],
@@ -1317,13 +1391,17 @@ def fallback_corridor_compact_layout(room_program, house_width, house_depth):
                 east_x,
                 garage_y,
                 east_w,
-                house_depth - garage_y,
+                house_depth - garage_y if garage_y > north_y else north_y - garage_y,
             )
         )
 
     return {
         "house": {"width": house_width, "depth": house_depth},
-        "rooms": rooms
+        "rooms": rooms,
+        "corridor_geometry": {
+            "shape": "T",
+            "parts": corridor_parts
+        }
     }
 
 
