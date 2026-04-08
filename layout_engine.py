@@ -2,6 +2,7 @@ import json
 import math
 import os
 import random
+from collections import deque
 from dotenv import load_dotenv
 from openai import OpenAI
 
