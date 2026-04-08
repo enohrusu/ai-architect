@@ -829,6 +829,11 @@ def build_shared_walls(layout):
                 seen.add(o["room_name"])
                 unique_rooms.append(o)
 
+        # Remove internal seams between corridor parts:
+        # if this segment belongs only to corridor geometry, do not create a wall
+        if len(unique_rooms) >= 2 and all(o["room_name"] == "corridor" for o in unique_rooms):
+            continue
+
         if is_exterior:
             walls.append({
                 "id": f"wall_{len(walls)+1}",
