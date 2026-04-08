@@ -729,6 +729,19 @@ def build_shared_walls(layout):
         }
 
         for side, seg in room_edges(corridor_part):
+            # Skip corridor edges that lie inside another corridor part
+            hidden_inside_other_corridor = False
+
+            for jdx, other in enumerate(corridor_parts):
+                if idx == jdx:
+                    continue
+                if segment_inside_rect(seg, other):
+                    hidden_inside_other_corridor = True
+                    break
+
+            if hidden_inside_other_corridor:
+                continue
+
             x1, y1, x2, y2 = seg
             raw_edges.append({
                 "room_name": "corridor",
@@ -1019,6 +1032,35 @@ def room_touches_any_corridor_part(room, corridor_parts):
             return True
     return False
 
+def rectangles_overlap_area(a, b):
+    overlap_w = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+    overlap_h = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+    if overlap_w <= 0 or overlap_h <= 0:
+        return None
+    return {
+        "x": max(a["x"], b["x"]),
+        "y": max(a["y"], b["y"]),
+        "w": overlap_w,
+        "h": overlap_h,
+    }
+
+
+def point_in_rect(px, py, rect):
+    return (
+        rect["x"] <= px <= rect["x"] + rect["w"]
+        and rect["y"] <= py <= rect["y"] + rect["h"]
+    )
+
+
+def segment_inside_rect(seg, rect, eps=0.001):
+    x1, y1, x2, y2 = seg
+    mx = (x1 + x2) / 2
+    my = (y1 + y2) / 2
+
+    return (
+        rect["x"] + eps < mx < rect["x"] + rect["w"] - eps
+        and rect["y"] + eps < my < rect["y"] + rect["h"] - eps
+    )
 
 def validate_required_corridor_contacts(layout):
     rooms = layout["rooms"]
