@@ -248,7 +248,7 @@ def classify_room_groups(room_program):
     }
 
 
-def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
+def ask_openai_for_zoning(house_data, room_program, house_width, house_depth):
     grouped = classify_room_groups(room_program)
 
     variation_hint = random.choice([
@@ -260,71 +260,29 @@ def ask_openai_for_layout(house_data, room_program, house_width, house_depth):
     ])
 
     prompt = f"""
-You are an architectural layout planner.
+    You are an architectural planner.
 
-Generate a UNIQUE realistic single-floor house plan every time.
+    DO NOT generate coordinates.
 
-Hard rules:
-- The house perimeter must be one rectangle only.
-- All rooms must fit completely inside the perimeter.
-- Rooms must not overlap.
-- Snap to a 0.5 m grid as much as possible, but logical access is more important than perfect snapping.
-- Use mostly rectangular rooms.
-- The corridor must be as small as possible while still giving logical access.
-- The corridor must be placed in the middle area of the house.
-- Bedrooms must access the corridor.
-- Bedrooms should have only one door access to the corridor later, so each bedroom should touch the corridor along one clear side.
-- The corridor should have walls around it except for the connection between living room and corridor.
-- Living room and corridor must connect directly.
-- Living room and kitchen must be adjacent or directly connected.
-- Living room should touch the front facade.
-- Bedrooms should be grouped together in a quieter zone.
-- Bathroom, wc, laundry, storage should be grouped near bedrooms.
-- Garage, if present, must touch an exterior edge.
-- All rooms together should fill the floor slab as much as possible.
-- If some surface remains, the living room should absorb it.
+    ONLY decide room zoning.
 
-Minimum dimensions:
-- Bedrooms: at least 2.5 m x 2.5 m
-- Kitchen: at least 3.0 m x 3.0 m
-- Garage: at least 3.65 m x 3.65 m
-- Bathroom: at least 2.0 m x 2.0 m
-- WC: at least 1.0 m x 1.0 m
-- Laundry: at least 1.5 m x 1.5 m
-- Storage: at least 2.0 m x 2.0 m
+    House:
+    - width: {house_width}
+    - depth: {house_depth}
 
-House rectangle:
-width = {house_width}
-depth = {house_depth}
+    Rooms:
+    {json.dumps(room_program, indent=2)}
 
-Room program:
-{json.dumps(room_program, indent=2)}
+    Return ONLY JSON:
 
-Grouped zones:
-{json.dumps(grouped, indent=2)}
-
-Variation target:
-- {variation_hint}
-- Produce a different valid plan than a standard grid layout.
-
-Return ONLY JSON in this exact format:
-{{
-  "house": {{
-    "width": {house_width},
-    "depth": {house_depth}
-  }},
-  "rooms": [
     {{
-      "name": "living_room",
-      "type": "living_room",
-      "x": 0,
-      "y": 0,
-      "w": 5.0,
-      "h": 6.0
+        "south_zone": ["living_room", "kitchen"],
+        "north_zone": ["master_bedroom", "secondary_bedroom_1", "secondary_bedroom_2"],
+        "west_zone": ["bathroom", "wc"],
+        "east_zone": ["laundry", "storage"],
+        "corridor_shape": "T"
     }}
-  ]
-}}
-"""
+    """
     response = client.responses.create(
         model="gpt-4.1-mini",
         input=prompt,
@@ -432,15 +390,14 @@ def ensure_minimums(rooms):
     rules = room_rules()
     min_dims = room_min_dimensions()
 
-    if room["w"] <= 0 or room["h"] <= 0:
-        min_w, min_h = room_min_dimensions()[room["type"]]
-        room["w"] = min_w
-        room["h"] = min_h
-
     for room in rooms:
+        if room["w"] <= 0 or room["h"] <= 0:
+            min_w, min_h = min_dims.get(room["type"], (1.0, 1.0))
+            room["w"] = min_w
+            room["h"] = min_h
+
         room = snap_room(room)
 
-        # area minimum
         area = room["w"] * room["h"]
         min_area = rules.get(room["type"], {}).get("min", 4)
 
@@ -449,7 +406,6 @@ def ensure_minimums(rooms):
             room["w"] = snap(room["w"] * factor)
             room["h"] = snap(room["h"] * factor)
 
-        # dimension minimums
         min_w, min_h = min_dims.get(room["type"], (1.0, 1.0))
         room["w"] = snap(max(room["w"], min_w))
         room["h"] = snap(max(room["h"], min_h))
@@ -705,6 +661,106 @@ def on_outer_perimeter(seg, house_width, house_depth):
 
     return False, None
 
+def build_layout_from_zoning(zoning, house_width, house_depth):
+    rooms = []
+
+    def make_room(name, room_type, x, y, w, h):
+        min_w, min_h = room_min_dimensions()[room_type]
+        return {
+            "name": name,
+            "type": room_type,
+            "x": snap(x),
+            "y": snap(y),
+            "w": snap(max(w, min_w)),
+            "h": snap(max(h, min_h)),
+        }
+
+    # -------------------------
+    # 1. Corridor (T shape)
+    # -------------------------
+    spine_w = 1.5
+    spine_h = 3.0
+    bar_h = 1.5
+
+    cx = house_width / 2
+
+    spine_x = snap(cx - spine_w / 2)
+    spine_y = snap((house_depth - spine_h - bar_h) / 2)
+
+    bar_x = 0
+    bar_y = snap(spine_y + spine_h)
+
+    corridor_parts = [
+        {"x": spine_x, "y": spine_y, "w": spine_w, "h": spine_h},
+        {"x": bar_x, "y": bar_y, "w": house_width, "h": bar_h},
+    ]
+
+    rooms.append({
+        "name": "corridor",
+        "type": "corridor",
+        "x": spine_x,
+        "y": spine_y,
+        "w": spine_w,
+        "h": spine_h,
+    })
+
+    # -------------------------
+    # 2. SOUTH ZONE
+    # -------------------------
+    south_y = 0
+    south_h = spine_y
+
+    south_rooms = zoning["south_zone"]
+    w_each = house_width / len(south_rooms)
+
+    for i, name in enumerate(south_rooms):
+        room_type = name if name != "secondary_bedroom_1" else "secondary_bedroom"
+        rooms.append(make_room(name, room_type, i * w_each, south_y, w_each, south_h))
+
+    # -------------------------
+    # 3. NORTH ZONE
+    # -------------------------
+    north_y = bar_y + bar_h
+    north_h = house_depth - north_y
+
+    north_rooms = zoning["north_zone"]
+    w_each = house_width / len(north_rooms)
+
+    for i, name in enumerate(north_rooms):
+        room_type = "secondary_bedroom" if "secondary" in name else name
+        rooms.append(make_room(name, room_type, i * w_each, north_y, w_each, north_h))
+
+    # -------------------------
+    # 4. SIDE ZONES
+    # -------------------------
+    mid_y = spine_y
+    mid_h = spine_h
+
+    left_rooms = zoning["west_zone"]
+    right_rooms = zoning["east_zone"]
+
+    left_w = spine_x
+    right_x = spine_x + spine_w
+    right_w = house_width - right_x
+
+    if left_rooms:
+        h_each = mid_h / len(left_rooms)
+        for i, name in enumerate(left_rooms):
+            rooms.append(make_room(name, name, 0, mid_y + i * h_each, left_w, h_each))
+
+    if right_rooms:
+        h_each = mid_h / len(right_rooms)
+        for i, name in enumerate(right_rooms):
+            rooms.append(make_room(name, name, right_x, mid_y + i * h_each, right_w, h_each))
+
+    return {
+        "house": {"width": house_width, "depth": house_depth},
+        "rooms": rooms,
+        "corridor_geometry": {
+            "shape": "T",
+            "parts": corridor_parts
+        }
+    }
 
 def build_shared_walls(layout):
     house_width = layout["house"]["width"]
@@ -1347,6 +1403,7 @@ def has_all_required_rooms(layout, room_program):
 
 def validate_full_slab_coverage(layout, house_width, house_depth, step=0.5):
     rooms = layout["rooms"]
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [])
 
     x = 0.0
     while x < house_width:
@@ -1362,11 +1419,22 @@ def validate_full_slab_coverage(layout, house_width, house_depth, step=0.5):
             }
 
             for room in rooms:
+                if room["type"] == "corridor":
+                    continue
                 if not (
                     probe["x"] + probe["w"] <= room["x"]
                     or room["x"] + room["w"] <= probe["x"]
                     or probe["y"] + probe["h"] <= room["y"]
                     or room["y"] + room["h"] <= probe["y"]
+                ):
+                    covered_by += 1
+
+            for part in corridor_parts:
+                if not (
+                    probe["x"] + probe["w"] <= part["x"]
+                    or part["x"] + part["w"] <= probe["x"]
+                    or probe["y"] + probe["h"] <= part["y"]
+                    or part["y"] + part["h"] <= probe["y"]
                 ):
                     covered_by += 1
 
@@ -1647,53 +1715,17 @@ def generate_layout(house_data):
     layout = None
 
     try:
-        candidate = ask_openai_for_layout(house_data, room_program, house_width, house_depth)
-
-        if "house" not in candidate:
-            candidate["house"] = {}
-
-        candidate["house"]["width"] = house_width
-        candidate["house"]["depth"] = house_depth
+        zoning = ask_openai_for_zoning(house_data, room_program, house_width, house_depth)
+        candidate = build_layout_from_zoning(zoning, house_width, house_depth)
 
         candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
         candidate["rooms"] = ensure_minimums(candidate["rooms"])
         candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
         candidate = resolve_overlaps(candidate, house_width, house_depth)
+        candidate = force_fill_slab(candidate, house_width, house_depth)
         candidate = fill_remaining_slab_area(candidate, house_width, house_depth)
         candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
         candidate = resolve_overlaps(candidate, house_width, house_depth)
-
-        if "corridor_geometry" not in candidate:
-            corridor_room = next((r for r in candidate["rooms"] if r["type"] == "corridor"), None)
-            if corridor_room:
-                cx = corridor_room["x"] + corridor_room["w"] / 2
-                cy = corridor_room["y"] + corridor_room["h"] / 2
-
-                spine_w = min(1.5, corridor_room["w"])
-                spine_h = min(3.0, max(2.5, corridor_room["h"]))
-                bar_w = min(6.0, house_width * 0.45)
-                bar_h = 1.5
-
-                spine_x = snap(cx - spine_w / 2)
-                spine_y = snap(cy - spine_h / 2)
-
-                candidate["corridor_geometry"] = {
-                    "shape": "T",
-                    "parts": [
-                        {
-                            "x": spine_x,
-                            "y": spine_y,
-                            "w": spine_w,
-                            "h": spine_h,
-                        },
-                        {
-                            "x": snap(cx - bar_w / 2),
-                            "y": snap(spine_y + spine_h),
-                            "w": snap(bar_w),
-                            "h": bar_h,
-                        }
-                    ]
-                }
 
         if has_all_required_rooms(candidate, room_program):
             valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
@@ -1730,7 +1762,7 @@ def generate_layout(house_data):
         print("AI layout failed, using fallback:", str(e))
 
     if layout is None:
-        layout = fallback_corridor_compact_layout(room_program, house_width, house_depth)
+        layout = fallback_partitioned_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
         layout = clamp_rooms_to_slab(layout, house_width, house_depth)
         layout = resolve_overlaps(layout, house_width, house_depth)
