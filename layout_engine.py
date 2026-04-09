@@ -1340,15 +1340,38 @@ def has_all_required_rooms(layout, room_program):
     expected_names = sorted(r["name"] for r in room_program)
     return actual_names == expected_names
 
-def validate_full_slab_coverage(layout, house_width, house_depth, tolerance=0.5):
-    slab_area = house_width * house_depth
-    rooms_area = sum(room["w"] * room["h"] for room in layout["rooms"])
+def validate_full_slab_coverage(layout, house_width, house_depth, step=0.5):
+    rooms = layout["rooms"]
 
-    if rooms_area < slab_area - tolerance:
-        return False, f"Rooms do not cover full slab: {rooms_area:.2f} < {slab_area:.2f}"
+    x = 0.0
+    while x < house_width:
+        y = 0.0
+        while y < house_depth:
+            covered_by = 0
 
-    if rooms_area > slab_area + tolerance:
-        return False, f"Rooms exceed slab area: {rooms_area:.2f} > {slab_area:.2f}"
+            probe = {
+                "x": x,
+                "y": y,
+                "w": step,
+                "h": step
+            }
+
+            for room in rooms:
+                if not (
+                    probe["x"] + probe["w"] <= room["x"]
+                    or room["x"] + room["w"] <= probe["x"]
+                    or probe["y"] + probe["h"] <= room["y"]
+                    or room["y"] + room["h"] <= probe["y"]
+                ):
+                    covered_by += 1
+
+            if covered_by == 0:
+                return False, f"Uncovered slab area near ({x:.2f}, {y:.2f})"
+            if covered_by > 1:
+                return False, f"Overlapping coverage near ({x:.2f}, {y:.2f})"
+
+            y = snap(y + step)
+        x = snap(x + step)
 
     return True, "OK"
 
@@ -1522,6 +1545,87 @@ def force_fill_slab(layout, house_width, house_depth):
 
     return layout
 
+def fill_remaining_slab_area(layout, house_width, house_depth):
+    rooms = layout["rooms"]
+
+    living = next((r for r in rooms if r["type"] == "living_room"), None)
+    if not living:
+        return layout
+
+    slab_area = house_width * house_depth
+    used_area = sum(r["w"] * r["h"] for r in rooms)
+    remaining = round(slab_area - used_area, 3)
+
+    if remaining <= 0:
+        return layout
+
+    step = 0.5
+
+    def can_expand(test_room):
+        if not inside_perimeter(test_room, house_width, house_depth):
+            return False
+
+        for other in rooms:
+            if other["name"] == living["name"]:
+                continue
+            if rectangles_overlap(test_room, other):
+                return False
+        return True
+
+    safety = 0
+    while remaining > 0.01 and safety < 500:
+        safety += 1
+        expanded = False
+
+        # try right
+        test = dict(living)
+        test["w"] = snap(test["w"] + step)
+        if can_expand(test):
+            living["w"] = test["w"]
+            remaining -= step * living["h"]
+            expanded = True
+
+        if remaining <= 0.01:
+            break
+
+        # try up
+        test = dict(living)
+        test["h"] = snap(test["h"] + step)
+        if can_expand(test):
+            living["h"] = test["h"]
+            remaining -= step * living["w"]
+            expanded = True
+
+        if remaining <= 0.01:
+            break
+
+        # try left
+        test = dict(living)
+        test["x"] = snap(test["x"] - step)
+        test["w"] = snap(test["w"] + step)
+        if can_expand(test):
+            living["x"] = test["x"]
+            living["w"] = test["w"]
+            remaining -= step * living["h"]
+            expanded = True
+
+        if remaining <= 0.01:
+            break
+
+        # try down
+        test = dict(living)
+        test["y"] = snap(test["y"] - step)
+        test["h"] = snap(test["h"] + step)
+        if can_expand(test):
+            living["y"] = test["y"]
+            living["h"] = test["h"]
+            remaining -= step * living["w"]
+            expanded = True
+
+        if not expanded:
+            break
+
+    return layout
 
 def room_has_min_area(room):
     rules = room_rules()
@@ -1547,6 +1651,9 @@ def generate_layout(house_data):
 
         candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
         candidate["rooms"] = ensure_minimums(candidate["rooms"])
+        candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
+        candidate = resolve_overlaps(candidate, house_width, house_depth)
+        candidate = fill_remaining_slab_area(candidate, house_width, house_depth)
         candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
         candidate = resolve_overlaps(candidate, house_width, house_depth)
 
@@ -1622,6 +1729,9 @@ def generate_layout(house_data):
         layout = clamp_rooms_to_slab(layout, house_width, house_depth)
         layout = resolve_overlaps(layout, house_width, house_depth)
         layout = force_fill_slab(layout, house_width, house_depth)
+        layout = fill_remaining_slab_area(layout, house_width, house_depth)
+        layout = clamp_rooms_to_slab(layout, house_width, house_depth)
+        layout = resolve_overlaps(layout, house_width, house_depth)
 
         layout = add_surface_labels(layout)
         layout = build_shared_walls(layout)
