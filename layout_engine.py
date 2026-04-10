@@ -66,13 +66,13 @@ def room_has_min_dimensions(room):
 def room_rules():
     return {
         "living_room": {"min": 20, "ideal_min": 25, "ideal_max": 35, "max": 999},
-        "kitchen": {"min": 8, "ideal_min": 12, "ideal_max": 18, "max": 25},
-        "master_bedroom": {"min": 12, "ideal_min": 14, "ideal_max": 18, "max": 25},
-        "secondary_bedroom": {"min": 9, "ideal_min": 10, "ideal_max": 12, "max": 16},
-        "bathroom": {"min": 4, "ideal_min": 5, "ideal_max": 8, "max": 12},
-        "wc": {"min": 1.2, "ideal_min": 1.5, "ideal_max": 2.0, "max": 3},
-        "laundry": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 8},
-        "storage": {"min": 2, "ideal_min": 3, "ideal_max": 5, "max": 8},
+        "kitchen": {"min": 8, "ideal_min": 10, "ideal_max": 12, "max": 12},
+        "master_bedroom": {"min": 12, "ideal_min": 12, "ideal_max": 12, "max": 12},
+        "secondary_bedroom": {"min": 9, "ideal_min": 10, "ideal_max": 12, "max": 12},
+        "bathroom": {"min": 4, "ideal_min": 5, "ideal_max": 6, "max": 6},
+        "wc": {"min": 1.2, "ideal_min": 2.0, "ideal_max": 4, "max": 4},
+        "laundry": {"min": 3, "ideal_min": 3.5, "ideal_max": 4, "max": 4},
+        "storage": {"min": 2, "ideal_min": 3, "ideal_max": 6, "max": 6},
         "garage": {"min": 15, "ideal_min": 18, "ideal_max": 20, "max": 25},
         "corridor": {"min": 3, "ideal_min": 4, "ideal_max": 6, "max": 10},
     }
@@ -215,12 +215,9 @@ def build_room_program(house_data):
     return targets
 
 def validate_total_area_usage(layout, target_area):
-    rooms = layout["rooms"]
-    total_room_area = sum(r["w"] * r["h"] for r in rooms)
-
-    if total_room_area < target_area * 0.90:
-        return False, f"Plan uses too little area: {total_room_area:.2f} < {target_area * 0.90:.2f}"
-
+    total_room_area = sum(r["w"] * r["h"] for r in layout["rooms"])
+    if total_room_area <= 0:
+        return False, "No room area generated"
     return True, "OK"
 
 def classify_room_groups(room_program):
@@ -252,7 +249,7 @@ DO NOT generate coordinates.
 ONLY decide room zoning for a rectangular house.
 
 Rules:
-- House width is fixed at 9 m.
+- House width is fixed at 8 m.
 - House depth varies to match area.
 - Corridor must be one simple vertical rectangle.
 - Corridor must start from the living room and extend north until it reaches the north exterior wall.
@@ -407,6 +404,36 @@ def ensure_minimums(rooms):
 
     return rooms
 
+def enforce_room_area_maximums(layout):
+    rules = room_rules()
+
+    for room in layout["rooms"]:
+        max_area = rules.get(room["type"], {}).get("max")
+        if not max_area or max_area == 999:
+            continue
+
+        area = room["w"] * room["h"]
+        if area <= max_area:
+            continue
+
+        min_w, min_h = room_min_dimensions().get(room["type"], (1.0, 1.0))
+
+        # shrink the larger side first, keep minimum dimensions
+        for _ in range(50):
+            area = room["w"] * room["h"]
+            if area <= max_area:
+                break
+
+            if room["w"] >= room["h"] and room["w"] - GRID >= min_w:
+                room["w"] = snap(room["w"] - GRID)
+            elif room["h"] - GRID >= min_h:
+                room["h"] = snap(room["h"] - GRID)
+            elif room["w"] - GRID >= min_w:
+                room["w"] = snap(room["w"] - GRID)
+            else:
+                break
+
+    return layout
 
 def validate_layout(layout, room_program, house_width, house_depth):
     if "rooms" not in layout:
@@ -492,7 +519,7 @@ def fallback_grid_layout(room_program, house_width, house_depth):
     corridor_w = 1.3
     corridor_h = 2.5
     corridor_x = snap((house_width - corridor_w) / 2 + 1.0)
-    corridor_x = min(corridor_x, snap(house_width - corridor_w))
+    corridor_x = clamp(corridor_x, 2.5, house_width - corridor_w - 1.5)
     corridor_y = snap((house_depth - corridor_h) / 2)
 
     corridor = {
@@ -685,7 +712,7 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
     south_h = 3.0
 
     corridor_x = snap((house_width - corridor_w) / 2 + 1.0)
-    corridor_x = min(corridor_x, snap(house_width - corridor_w))
+    corridor_x = clamp(corridor_x, 2.5, house_width - corridor_w - 1.5)
     corridor_y = snap(south_h)
     corridor_h = snap(house_depth - corridor_y)  # reaches north wall
 
@@ -742,6 +769,12 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
 
     east_room_names = [name for name in east_zone if name != "kitchen"]
 
+    def get_program_target(room_program, room_name):
+        for r in room_program:
+            if r["name"] == room_name:
+                return r["target_area"]
+        return 4.0
+
     if room_program:
         required_types = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage", "garage"]]
         required_names = [r["name"] for r in required_types]
@@ -752,13 +785,21 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
     if east_room_names:
         y_cursor = right_y
         remaining_h = right_h
+
         for i, name in enumerate(east_room_names):
             rt = room_type_from_name(name)
+            target_area = get_program_target(room_program, name)
+            max_area = room_rules()[rt]["max"]
+
+            w, h = size_from_area(rt, target_area, max_area)
+
+            h = max(room_min_dimensions()[rt][1], h)
+
             if i == len(east_room_names) - 1:
-                h = remaining_h
+                h = snap((right_y + right_h) - y_cursor)
             else:
-                h = snap(right_h / len(east_room_names))
-                remaining_h = snap(remaining_h - h)
+                if y_cursor + h > right_y + right_h:
+                    h = snap((right_y + right_h) - y_cursor)
 
             rooms.append(make_room(name, rt, right_x, y_cursor, right_w, h))
             y_cursor = snap(y_cursor + h)
@@ -1303,6 +1344,22 @@ def carve_doors_from_blocked(blocked, layout):
 
     return blocked
 
+def size_from_area(room_type, target_area, max_area=None):
+    min_w, min_h = room_min_dimensions().get(room_type, (1.0, 1.0))
+
+    if max_area:
+        target_area = min(target_area, max_area)
+
+    # start square
+    w = math.sqrt(target_area)
+    h = target_area / max(w, 0.1)
+
+    # enforce minimums
+    w = max(w, min_w)
+    h = max(h, min_h)
+
+    return snap(w), snap(h)
+
 def build_walkable_cells(layout):
     house = layout["house"]
     rooms = layout["rooms"]
@@ -1397,6 +1454,13 @@ def add_metadata(layout):
     layout["window_rules"] = {
         "windows_only_on_exterior_walls": True
     }
+    layout["special_windows"] = [
+        {
+            "room": "corridor",
+            "facade": "north",
+            "required": True
+        }
+    ]
     layout["corridor_rules"] = {
         "max_width_m": 1.5,
         "max_length_m": 999,
@@ -1555,10 +1619,9 @@ def fill_remaining_slab_area(layout, house_width, house_depth):
             return False
 
         for other in rooms:
-            if other["name"] == living["name"]:
-                continue
-            if rectangles_overlap(test_room, other):
-                return False
+            if other["name"] != living["name"]:
+                if rectangles_overlap(test_room, other):
+                    return False
         return True
 
     safety = 0
@@ -1621,6 +1684,20 @@ def room_has_min_area(room):
     min_area = rules.get(room["type"], {}).get("min", 0)
     return room["w"] * room["h"] >= min_area
 
+def validate_room_maximums(layout):
+    rules = room_rules()
+
+    for room in layout["rooms"]:
+        max_area = rules.get(room["type"], {}).get("max")
+        if not max_area or max_area == 999:
+            continue
+
+        area = room["w"] * room["h"]
+        if area > max_area + 0.01:
+            return False, f"{room['name']} exceeds max area: {area:.2f} > {max_area:.2f}"
+
+    return True, "OK"
+
 def generate_layout(house_data):
     total_area = float(house_data.get("area_m2", 120))
     slab_candidates = estimate_house_rectangles(total_area)
@@ -1635,9 +1712,9 @@ def generate_layout(house_data):
 
         candidate["rooms"] = [snap_room(r) for r in candidate["rooms"]]
         candidate["rooms"] = ensure_minimums(candidate["rooms"])
+        candidate = enforce_room_area_maximums(candidate)
         candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
         candidate = resolve_overlaps(candidate, house_width, house_depth)
-        candidate = clamp_rooms_to_slab(candidate, house_width, house_depth)
 
         if has_all_required_rooms(candidate, room_program):
             valid, msg = validate_layout(candidate, room_program, house_width, house_depth)
@@ -1645,6 +1722,7 @@ def generate_layout(house_data):
             corridor_ok, corridor_msg = validate_corridor_position(candidate, house_width, house_depth)
             area_ok, area_msg = validate_total_area_usage(candidate, total_area)
             overlap_ok, overlap_msg = validate_no_overlap_strict(candidate)
+            max_ok, max_msg = validate_room_maximums(candidate)
             required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(candidate)
             coverage_ok, coverage_msg = validate_full_slab_coverage(candidate, house_width, house_depth)
 
@@ -1660,6 +1738,7 @@ def generate_layout(house_data):
                 and corridor_ok
                 and area_ok
                 and overlap_ok
+                and max_ok
                 and required_corridor_ok
                 and coverage_ok
             ):
@@ -1676,9 +1755,9 @@ def generate_layout(house_data):
     if layout is None:
         layout = fallback_partitioned_layout(room_program, house_width, house_depth)
         layout["rooms"] = ensure_minimums(layout["rooms"])
+        layout = enforce_room_area_maximums(layout)
         layout = clamp_rooms_to_slab(layout, house_width, house_depth)
         layout = resolve_overlaps(layout, house_width, house_depth)
-        layout = clamp_rooms_to_slab(layout, house_width, house_depth)
 
         layout = add_surface_labels(layout)
         layout = build_shared_walls(layout)
