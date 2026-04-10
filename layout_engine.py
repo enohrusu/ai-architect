@@ -98,17 +98,29 @@ def validate_adjacency(layout):
 
     living = next((r for r in rooms if r["type"] == "living_room"), None)
     kitchen = next((r for r in rooms if r["type"] == "kitchen"), None)
-    bedrooms = [r for r in rooms if r["type"] in ["master_bedroom", "secondary_bedroom"]]
+
+    if living:
+        if not room_touches_any_corridor_part(living, corridor_parts):
+            return False, "Living room must touch corridor"
+
+        touches_exterior = (
+            abs(living["x"] - 0) < 0.01
+            or abs(living["y"] - 0) < 0.01
+            or abs((living["x"] + living["w"]) - layout["house"]["width"]) < 0.01
+            or abs((living["y"] + living["h"]) - layout["house"]["depth"]) < 0.01
+        )
+        if not touches_exterior:
+            return False, "Living room must touch exterior wall"
 
     if living and kitchen and not rooms_touch(living, kitchen):
         return False, "Living room must touch kitchen"
 
-    if living and not room_touches_any_corridor_part(living, corridor_parts):
-        return False, "Living room must touch corridor"
+    for room in rooms:
+        if room["type"] in ["corridor", "kitchen"]:
+            continue
 
-    for bedroom in bedrooms:
-        if not room_touches_any_corridor_part(bedroom, corridor_parts):
-            return False, f"{bedroom['name']} must touch corridor"
+        if not room_touches_any_corridor_part(room, corridor_parts):
+            return False, f"{room['name']} must touch corridor"
 
     return True, "OK"
 
@@ -214,6 +226,34 @@ def build_room_program(house_data):
 
     return targets
 
+def validate_exterior_contact_and_corridor_adjacency(layout):
+    rooms = layout["rooms"]
+    house = layout["house"]
+    corridor = next((r for r in rooms if r["type"] == "corridor"), None)
+    corridor_parts = layout.get("corridor_geometry", {}).get("parts", [corridor] if corridor else [])
+
+    if not corridor_parts:
+        return False, "Missing corridor"
+
+    for room in rooms:
+        if room["type"] in ["corridor", "kitchen"]:
+            continue
+
+        touches_corridor = room_touches_any_corridor_part(room, corridor_parts)
+        if not touches_corridor:
+            return False, f"{room['name']} must touch corridor"
+
+        touches_exterior = (
+            abs(room["x"] - 0) < 0.01
+            or abs(room["y"] - 0) < 0.01
+            or abs((room["x"] + room["w"]) - house["width"]) < 0.01
+            or abs((room["y"] + room["h"]) - house["depth"]) < 0.01
+        )
+        if not touches_exterior:
+            return False, f"{room['name']} must touch an exterior wall"
+
+    return True, "OK"
+
 def validate_total_area_usage(layout, target_area):
     total_room_area = sum(r["w"] * r["h"] for r in layout["rooms"])
     if total_room_area <= 0:
@@ -253,11 +293,12 @@ Rules:
 - House depth varies to match area.
 - Corridor must be one simple vertical rectangle.
 - Corridor must start from the living room and extend north until it reaches the north exterior wall.
-- Bedrooms must be placed in the WEST part of the house layout.
-- All other rooms must be placed in the EAST part of the house layout.
-- Living room must remain in the south/front area and connect to the corridor.
-- Kitchen should stay in the south/front area near the living room.
-- Bathroom, WC, laundry, and storage should be grouped on the east side near the corridor.
+- All rooms except kitchen must touch the corridor.
+- All rooms also touch an exterior wall.
+- Bedrooms must be placed in the west part of the house layout.
+- Bathroom, WC, laundry, and storage must be placed in the east part of the house layout.
+- Kitchen may be internal-adjacent to the living room and does not need to touch the corridor.
+- Interior walls do not need to align perfectly to the grid; logical adjacency is more important.
 - Garage, if present, should be on the east side.
 
 House:
@@ -684,6 +725,13 @@ def on_outer_perimeter(seg, house_width, house_depth):
 
     return False, None
 
+def get_program_target(room_program, room_name, default_area=4.0):
+    for r in room_program:
+        if r["name"] == room_name:
+            return r.get("target_area", default_area)
+    return default_area
+
+
 def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None):
     rooms = []
 
@@ -703,18 +751,63 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
             "h": snap(max(h, min_h)),
         }
 
+    def fit_vertical_stack(room_names, x, y, width, total_height):
+        stacked = []
+        y_cursor = snap(y)
+        remaining_h = snap(total_height)
+
+        for i, name in enumerate(room_names):
+            rt = room_type_from_name(name)
+            target_area = get_program_target(room_program or [], name, room_rules().get(rt, {}).get("ideal_min", 4.0))
+            max_area = room_rules().get(rt, {}).get("max", 999)
+
+            min_w, min_h = room_min_dimensions().get(rt, (1.0, 1.0))
+
+            # Height derived from target area and actual fixed column width
+            desired_h = snap(target_area / max(width, 0.1))
+            desired_h = max(desired_h, min_h)
+
+            if max_area != 999:
+                desired_h = min(desired_h, snap(max_area / max(width, 0.1)))
+
+            if i == len(room_names) - 1:
+                h = remaining_h
+            else:
+                h = desired_h
+                rooms_left = len(room_names) - i - 1
+
+                min_remaining = 0.0
+                for next_name in room_names[i + 1:]:
+                    next_rt = room_type_from_name(next_name)
+                    _, next_min_h = room_min_dimensions().get(next_rt, (1.0, 1.0))
+                    min_remaining += next_min_h
+
+                h = min(h, snap(remaining_h - min_remaining))
+                h = max(h, min_h)
+
+            stacked.append(make_room(name, rt, x, y_cursor, width, h))
+            y_cursor = snap(y_cursor + h)
+            remaining_h = snap((y + total_height) - y_cursor)
+
+        return stacked
+
     south_zone = zoning.get("south_zone", ["living_room"])
     west_zone = zoning.get("west_zone", [])
     east_zone = zoning.get("east_zone", [])
 
-    # corridor: vertical rectangle, reaching north exterior wall
+    living_name = next((r["name"] for r in (room_program or []) if r["type"] == "living_room"), "living_room")
+    kitchen_name = next((r["name"] for r in (room_program or []) if r["type"] == "kitchen"), None)
+
+    # Corridor: 1 m east from center, vertical, reaches north wall
     corridor_w = 1.5
     south_h = 3.0
 
-    corridor_x = snap((house_width - corridor_w) / 2 + 1.0)
+    centered_x = (house_width - corridor_w) / 2
+    corridor_x = snap(centered_x + 1.0)
     corridor_x = clamp(corridor_x, 2.5, house_width - corridor_w - 1.5)
+
     corridor_y = snap(south_h)
-    corridor_h = snap(house_depth - corridor_y)  # reaches north wall
+    corridor_h = snap(house_depth - corridor_y)
 
     rooms.append({
         "name": "corridor",
@@ -725,86 +818,53 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
         "h": corridor_h,
     })
 
-    # south/front band: living room across width, kitchen on east if present
-    living_present = "living_room" in south_zone or any(r["type"] == "living_room" for r in (room_program or []))
-    kitchen_present = any(name == "kitchen" for name in east_zone) or any(r["type"] == "kitchen" for r in (room_program or []))
-
+    # South band: living + kitchen
+    kitchen_present = kitchen_name is not None
     kitchen_w = 3.0 if kitchen_present else 0.0
     living_w = snap(house_width - kitchen_w)
 
-    if living_present:
-        rooms.append(make_room("living_room", "living_room", 0, 0, living_w, south_h))
+    rooms.append(make_room(living_name, "living_room", 0, 0, living_w, south_h))
 
     if kitchen_present:
-        rooms.append(make_room("kitchen", "kitchen", living_w, 0, kitchen_w, south_h))
-        east_zone = [r for r in east_zone if r != "kitchen"]
+        rooms.append(make_room(kitchen_name, "kitchen", living_w, 0, kitchen_w, south_h))
 
-    # west side above living: bedrooms stacked vertically from south_h to north wall
+    # West side above south band: bedrooms only
     west_x = 0.0
-    west_w = corridor_x
     west_y = corridor_y
-    west_h = house_depth - west_y
+    west_w = snap(corridor_x)
+    west_h = snap(house_depth - west_y)
 
-    bedroom_names = [name for name in west_zone if room_type_from_name(name) in ["master_bedroom", "secondary_bedroom"]]
+    west_room_names = [
+        name for name in west_zone
+        if room_type_from_name(name) in ["master_bedroom", "secondary_bedroom"]
+    ]
 
-    if bedroom_names:
-        y_cursor = west_y
-        remaining_h = west_h
-        for i, name in enumerate(bedroom_names):
-            rt = room_type_from_name(name)
-            if i == len(bedroom_names) - 1:
-                h = remaining_h
-            else:
-                h = snap(west_h / len(bedroom_names))
-                remaining_h = snap(remaining_h - h)
+    rooms.extend(fit_vertical_stack(west_room_names, west_x, west_y, west_w, west_h))
 
-            rooms.append(make_room(name, rt, west_x, y_cursor, west_w, h))
-            y_cursor = snap(y_cursor + h)
+    # East side above south band: service rooms (+ garage if present)
+    east_x = snap(corridor_x + corridor_w)
+    east_y = corridor_y
+    east_w = snap(house_width - east_x)
+    east_h = snap(house_depth - east_y)
 
-    # east side above kitchen: service rooms stacked vertically from south_h to north wall
-    right_x = snap(corridor_x + corridor_w)
-    right_w = snap(house_width - right_x)
-    right_y = corridor_y
-    right_h = house_depth - right_y
+    east_room_names = [
+        name for name in east_zone
+        if room_type_from_name(name) in ["bathroom", "wc", "laundry", "storage", "garage"]
+    ]
 
-    east_room_names = [name for name in east_zone if name != "kitchen"]
-
-    def get_program_target(room_program, room_name):
-        for r in room_program:
-            if r["name"] == room_name:
-                return r["target_area"]
-        return 4.0
-
+    # Ensure required east-side rooms exist even if zoning forgot one
     if room_program:
-        required_types = [r for r in room_program if r["type"] in ["bathroom", "wc", "laundry", "storage", "garage"]]
-        required_names = [r["name"] for r in required_types]
-        for rn in required_names:
+        required_east = [
+            r["name"] for r in room_program
+            if r["type"] in ["bathroom", "wc", "laundry", "storage", "garage"]
+        ]
+        for rn in required_east:
             if rn not in east_room_names:
                 east_room_names.append(rn)
 
-    if east_room_names:
-        y_cursor = right_y
-        remaining_h = right_h
+    rooms.extend(fit_vertical_stack(east_room_names, east_x, east_y, east_w, east_h))
 
-        for i, name in enumerate(east_room_names):
-            rt = room_type_from_name(name)
-            target_area = get_program_target(room_program, name)
-            max_area = room_rules()[rt]["max"]
-
-            w, h = size_from_area(rt, target_area, max_area)
-
-            h = max(room_min_dimensions()[rt][1], h)
-
-            if i == len(east_room_names) - 1:
-                h = snap((right_y + right_h) - y_cursor)
-            else:
-                if y_cursor + h > right_y + right_h:
-                    h = snap((right_y + right_h) - y_cursor)
-
-            rooms.append(make_room(name, rt, right_x, y_cursor, right_w, h))
-            y_cursor = snap(y_cursor + h)
-
-    return {
+    layout = {
         "house": {"width": house_width, "depth": house_depth},
         "rooms": rooms,
         "corridor_geometry": {
@@ -819,6 +879,31 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
             ]
         }
     }
+
+    layout["rooms"] = [snap_room(r) for r in layout["rooms"]]
+    return layout
+
+
+def fallback_partitioned_layout(room_program, house_width, house_depth):
+    zoning = {
+        "south_zone": ["living_room"],
+        "west_zone": [
+            r["name"] for r in room_program
+            if r["type"] in ["master_bedroom", "secondary_bedroom"]
+        ],
+        "east_zone": [
+            r["name"] for r in room_program
+            if r["type"] in ["kitchen", "bathroom", "wc", "laundry", "storage", "garage"]
+        ],
+        "corridor_shape": "straight_north_full"
+    }
+
+    return build_layout_from_zoning(
+        zoning,
+        house_width,
+        house_depth,
+        room_program=room_program
+    )
 
 def build_shared_walls(layout):
     house_width = layout["house"]["width"]
@@ -1454,6 +1539,11 @@ def add_metadata(layout):
     layout["window_rules"] = {
         "windows_only_on_exterior_walls": True
     }
+    layout["adjacency_rules"] = {
+        "all_rooms_except_kitchen_touch_corridor": True,
+        "all_rooms_except_kitchen_touch_exterior_wall": True,
+        "grid_alignment_preferred_but_not_required": True
+    }
     layout["special_windows"] = [
         {
             "room": "corridor",
@@ -1725,6 +1815,7 @@ def generate_layout(house_data):
             max_ok, max_msg = validate_room_maximums(candidate)
             required_corridor_ok, required_corridor_msg = validate_required_corridor_contacts(candidate)
             coverage_ok, coverage_msg = validate_full_slab_coverage(candidate, house_width, house_depth)
+            exterior_corridor_ok, exterior_corridor_msg = validate_exterior_contact_and_corridor_adjacency(candidate)
 
             candidate = add_surface_labels(candidate)
             candidate = build_shared_walls(candidate)
@@ -1740,6 +1831,7 @@ def generate_layout(house_data):
                 and overlap_ok
                 and max_ok
                 and required_corridor_ok
+                and exterior_corridor_ok
                 and coverage_ok
             ):
                 layout = candidate
