@@ -135,7 +135,7 @@ def room_name(room_type, index, all_rooms):
 
 
 def estimate_house_rectangles(total_area):
-    width = 9.0
+    width = 8.0
     depth = snap(total_area / width)
 
     if depth < 6.0:
@@ -491,7 +491,8 @@ def fallback_grid_layout(room_program, house_width, house_depth):
     # Compact corridor, strictly within your target
     corridor_w = 1.3
     corridor_h = 2.5
-    corridor_x = snap((house_width - corridor_w) / 2)
+    corridor_x = snap((house_width - corridor_w) / 2 + 1.0)
+    corridor_x = min(corridor_x, snap(house_width - corridor_w))
     corridor_y = snap((house_depth - corridor_h) / 2)
 
     corridor = {
@@ -683,7 +684,8 @@ def build_layout_from_zoning(zoning, house_width, house_depth, room_program=None
     corridor_w = 1.5
     south_h = 3.0
 
-    corridor_x = snap((house_width - corridor_w) / 2)
+    corridor_x = snap((house_width - corridor_w) / 2 + 1.0)
+    corridor_x = min(corridor_x, snap(house_width - corridor_w))
     corridor_y = snap(south_h)
     corridor_h = snap(house_depth - corridor_y)  # reaches north wall
 
@@ -936,6 +938,10 @@ def build_shared_walls(layout):
             continue
 
         if is_exterior:
+            room_names = [o["room_name"] for o in unique_rooms]
+
+            window_allowed = True
+
             walls.append({
                 "id": f"wall_{len(walls)+1}",
                 "type": "exterior",
@@ -946,9 +952,9 @@ def build_shared_walls(layout):
                 "orientation": segment_orientation(seg),
                 "length": segment_length(seg),
                 "thickness": EXTERIOR_WALL_THICKNESS,
-                "rooms": [o["room_name"] for o in unique_rooms],
+                "rooms": room_names,
                 "facade": facade,
-                "window_allowed": True,
+                "window_allowed": window_allowed,
             })
         elif len(unique_rooms) >= 2:
             walls.append({
@@ -1413,7 +1419,7 @@ def add_metadata(layout):
     layout["space_rules"] = {
         "bathroom_and_wc_combined": False,
         "laundry_and_storage_combined": False,
-        "floor_slab_width_fixed_m": 9.0
+        "floor_slab_width_fixed_m": 8.0
     }
     
     layout["coverage_rules"] = {

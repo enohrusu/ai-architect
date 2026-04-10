@@ -414,6 +414,8 @@ for door in door_plan:
 
 # ---------- Windows only on exterior walls ----------
 def window_dimensions_for_room_type(room_type):
+    if room_type == "corridor":
+        return 0.8, 1.2, 1.5
     if room_type in ["bathroom", "wc"]:
         return 0.6, 0.9, 1.8
     if room_type in ["master_bedroom", "secondary_bedroom"]:
@@ -426,6 +428,9 @@ def window_dimensions_for_room_type(room_type):
 
 
 def window_count_for_room_type(room_type, wall_length):
+    if room_type == "corridor":
+        return 1 if wall_length >= 0.8 else 0
+
     if wall_length < 2.0:
         return 0
     if room_type == "living_room":
@@ -458,6 +463,10 @@ for wall_data in walls:
 
     room_type = room_data["type"]
     count = window_count_for_room_type(room_type, wall_data["length"])
+
+    if room_type == "corridor":
+        if wall_data.get("facade") != "north":
+            continue
 
     if count == 0:
         continue
